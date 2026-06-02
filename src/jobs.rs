@@ -320,6 +320,42 @@ pub struct JobBuilder {
     last_task: Option<TaskName>,
 }
 
+macro_rules! linear_pdf_task_methods {
+    ($method:ident, $with_method:ident, $task_type:ident) => {
+        /// Appends a PDF operation task using the previous task as input.
+        pub fn $method(self) -> Self {
+            let input = self.previous_input();
+            self.append_task(TaskRequest::$method(input))
+        }
+
+        /// Appends and configures a PDF operation task using the previous task as input.
+        pub fn $with_method<F>(self, configure: F) -> Self
+        where
+            F: FnOnce($task_type) -> $task_type,
+        {
+            let input = self.previous_input();
+            self.append_configured_task($task_type::new(input), configure)
+        }
+    };
+}
+
+macro_rules! graph_pdf_task_methods {
+    ($method:ident, $with_method:ident, $task_type:ident) => {
+        /// Adds a PDF operation task.
+        pub fn $method(&mut self, input: impl Into<Input>) -> TaskName {
+            self.$with_method(input, identity)
+        }
+
+        /// Adds and configures a PDF operation task.
+        pub fn $with_method<F>(&mut self, input: impl Into<Input>, configure: F) -> TaskName
+        where
+            F: FnOnce($task_type) -> $task_type,
+        {
+            self.add_configured_task($task_type::new(input), configure)
+        }
+    };
+}
+
 impl JobBuilder {
     /// Creates an empty job builder.
     pub fn new() -> Self {
@@ -566,53 +602,18 @@ impl JobBuilder {
         self.append_task(TaskRequest::command(input, engine, command, arguments))
     }
 
-    /// Appends a `pdf/a` task using the previous task as input.
-    pub fn pdf_a(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::pdf_a(input))
-    }
-
-    /// Appends a `pdf/x` task using the previous task as input.
-    pub fn pdf_x(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::pdf_x(input))
-    }
-
-    /// Appends a `pdf/ocr` task using the previous task as input.
-    pub fn pdf_ocr(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::pdf_ocr(input))
-    }
-
-    /// Appends a `pdf/encrypt` task using the previous task as input.
-    pub fn pdf_encrypt(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::pdf_encrypt(input))
-    }
-
-    /// Appends a `pdf/decrypt` task using the previous task as input.
-    pub fn pdf_decrypt(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::pdf_decrypt(input))
-    }
-
-    /// Appends a `pdf/split-pages` task using the previous task as input.
-    pub fn pdf_split_pages(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::pdf_split_pages(input))
-    }
-
-    /// Appends a `pdf/extract-pages` task using the previous task as input.
-    pub fn pdf_extract_pages(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::pdf_extract_pages(input))
-    }
-
-    /// Appends a `pdf/rotate-pages` task using the previous task as input.
-    pub fn pdf_rotate_pages(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::pdf_rotate_pages(input))
-    }
+    linear_pdf_task_methods!(pdf_a, pdf_a_with, PdfATask);
+    linear_pdf_task_methods!(pdf_x, pdf_x_with, PdfXTask);
+    linear_pdf_task_methods!(pdf_ocr, pdf_ocr_with, PdfOcrTask);
+    linear_pdf_task_methods!(pdf_encrypt, pdf_encrypt_with, PdfEncryptTask);
+    linear_pdf_task_methods!(pdf_decrypt, pdf_decrypt_with, PdfDecryptTask);
+    linear_pdf_task_methods!(pdf_split_pages, pdf_split_pages_with, PdfSplitPagesTask);
+    linear_pdf_task_methods!(
+        pdf_extract_pages,
+        pdf_extract_pages_with,
+        PdfExtractPagesTask
+    );
+    linear_pdf_task_methods!(pdf_rotate_pages, pdf_rotate_pages_with, PdfRotatePagesTask);
 
     /// Appends an `export/url` task using the previous task as input.
     pub fn export_url(self) -> Self {
@@ -907,78 +908,6 @@ impl JobBuilder {
             CommandTask::new(input, engine, command, arguments),
             configure,
         )
-    }
-
-    /// Appends and configures a `pdf/a` task using the previous task as input.
-    pub fn pdf_a_with<F>(self, configure: F) -> Self
-    where
-        F: FnOnce(PdfATask) -> PdfATask,
-    {
-        let input = self.previous_input();
-        self.append_configured_task(PdfATask::new(input), configure)
-    }
-
-    /// Appends and configures a `pdf/x` task using the previous task as input.
-    pub fn pdf_x_with<F>(self, configure: F) -> Self
-    where
-        F: FnOnce(PdfXTask) -> PdfXTask,
-    {
-        let input = self.previous_input();
-        self.append_configured_task(PdfXTask::new(input), configure)
-    }
-
-    /// Appends and configures a `pdf/ocr` task using the previous task as input.
-    pub fn pdf_ocr_with<F>(self, configure: F) -> Self
-    where
-        F: FnOnce(PdfOcrTask) -> PdfOcrTask,
-    {
-        let input = self.previous_input();
-        self.append_configured_task(PdfOcrTask::new(input), configure)
-    }
-
-    /// Appends and configures a `pdf/encrypt` task using the previous task as input.
-    pub fn pdf_encrypt_with<F>(self, configure: F) -> Self
-    where
-        F: FnOnce(PdfEncryptTask) -> PdfEncryptTask,
-    {
-        let input = self.previous_input();
-        self.append_configured_task(PdfEncryptTask::new(input), configure)
-    }
-
-    /// Appends and configures a `pdf/decrypt` task using the previous task as input.
-    pub fn pdf_decrypt_with<F>(self, configure: F) -> Self
-    where
-        F: FnOnce(PdfDecryptTask) -> PdfDecryptTask,
-    {
-        let input = self.previous_input();
-        self.append_configured_task(PdfDecryptTask::new(input), configure)
-    }
-
-    /// Appends and configures a `pdf/split-pages` task using the previous task as input.
-    pub fn pdf_split_pages_with<F>(self, configure: F) -> Self
-    where
-        F: FnOnce(PdfSplitPagesTask) -> PdfSplitPagesTask,
-    {
-        let input = self.previous_input();
-        self.append_configured_task(PdfSplitPagesTask::new(input), configure)
-    }
-
-    /// Appends and configures a `pdf/extract-pages` task using the previous task as input.
-    pub fn pdf_extract_pages_with<F>(self, configure: F) -> Self
-    where
-        F: FnOnce(PdfExtractPagesTask) -> PdfExtractPagesTask,
-    {
-        let input = self.previous_input();
-        self.append_configured_task(PdfExtractPagesTask::new(input), configure)
-    }
-
-    /// Appends and configures a `pdf/rotate-pages` task using the previous task as input.
-    pub fn pdf_rotate_pages_with<F>(self, configure: F) -> Self
-    where
-        F: FnOnce(PdfRotatePagesTask) -> PdfRotatePagesTask,
-    {
-        let input = self.previous_input();
-        self.append_configured_task(PdfRotatePagesTask::new(input), configure)
     }
 
     /// Appends and configures an `export/url` task using the previous task as input.
@@ -1628,109 +1557,18 @@ impl JobGraphBuilder {
         )
     }
 
-    /// Adds a `pdf/a` task.
-    pub fn pdf_a(&mut self, input: impl Into<Input>) -> TaskName {
-        self.pdf_a_with(input, identity)
-    }
-
-    /// Adds and configures a `pdf/a` task.
-    pub fn pdf_a_with<F>(&mut self, input: impl Into<Input>, configure: F) -> TaskName
-    where
-        F: FnOnce(PdfATask) -> PdfATask,
-    {
-        self.add_configured_task(PdfATask::new(input), configure)
-    }
-
-    /// Adds a `pdf/x` task.
-    pub fn pdf_x(&mut self, input: impl Into<Input>) -> TaskName {
-        self.pdf_x_with(input, identity)
-    }
-
-    /// Adds and configures a `pdf/x` task.
-    pub fn pdf_x_with<F>(&mut self, input: impl Into<Input>, configure: F) -> TaskName
-    where
-        F: FnOnce(PdfXTask) -> PdfXTask,
-    {
-        self.add_configured_task(PdfXTask::new(input), configure)
-    }
-
-    /// Adds a `pdf/ocr` task.
-    pub fn pdf_ocr(&mut self, input: impl Into<Input>) -> TaskName {
-        self.pdf_ocr_with(input, identity)
-    }
-
-    /// Adds and configures a `pdf/ocr` task.
-    pub fn pdf_ocr_with<F>(&mut self, input: impl Into<Input>, configure: F) -> TaskName
-    where
-        F: FnOnce(PdfOcrTask) -> PdfOcrTask,
-    {
-        self.add_configured_task(PdfOcrTask::new(input), configure)
-    }
-
-    /// Adds a `pdf/encrypt` task.
-    pub fn pdf_encrypt(&mut self, input: impl Into<Input>) -> TaskName {
-        self.pdf_encrypt_with(input, identity)
-    }
-
-    /// Adds and configures a `pdf/encrypt` task.
-    pub fn pdf_encrypt_with<F>(&mut self, input: impl Into<Input>, configure: F) -> TaskName
-    where
-        F: FnOnce(PdfEncryptTask) -> PdfEncryptTask,
-    {
-        self.add_configured_task(PdfEncryptTask::new(input), configure)
-    }
-
-    /// Adds a `pdf/decrypt` task.
-    pub fn pdf_decrypt(&mut self, input: impl Into<Input>) -> TaskName {
-        self.pdf_decrypt_with(input, identity)
-    }
-
-    /// Adds and configures a `pdf/decrypt` task.
-    pub fn pdf_decrypt_with<F>(&mut self, input: impl Into<Input>, configure: F) -> TaskName
-    where
-        F: FnOnce(PdfDecryptTask) -> PdfDecryptTask,
-    {
-        self.add_configured_task(PdfDecryptTask::new(input), configure)
-    }
-
-    /// Adds a `pdf/split-pages` task.
-    pub fn pdf_split_pages(&mut self, input: impl Into<Input>) -> TaskName {
-        self.pdf_split_pages_with(input, identity)
-    }
-
-    /// Adds and configures a `pdf/split-pages` task.
-    pub fn pdf_split_pages_with<F>(&mut self, input: impl Into<Input>, configure: F) -> TaskName
-    where
-        F: FnOnce(PdfSplitPagesTask) -> PdfSplitPagesTask,
-    {
-        self.add_configured_task(PdfSplitPagesTask::new(input), configure)
-    }
-
-    /// Adds a `pdf/extract-pages` task.
-    pub fn pdf_extract_pages(&mut self, input: impl Into<Input>) -> TaskName {
-        self.pdf_extract_pages_with(input, identity)
-    }
-
-    /// Adds and configures a `pdf/extract-pages` task.
-    pub fn pdf_extract_pages_with<F>(&mut self, input: impl Into<Input>, configure: F) -> TaskName
-    where
-        F: FnOnce(PdfExtractPagesTask) -> PdfExtractPagesTask,
-    {
-        self.add_configured_task(PdfExtractPagesTask::new(input), configure)
-    }
-
-    /// Adds a `pdf/rotate-pages` task.
-    pub fn pdf_rotate_pages(&mut self, input: impl Into<Input>) -> TaskName {
-        self.pdf_rotate_pages_with(input, identity)
-    }
-
-    /// Adds and configures a `pdf/rotate-pages` task.
-    pub fn pdf_rotate_pages_with<F>(&mut self, input: impl Into<Input>, configure: F) -> TaskName
-    where
-        F: FnOnce(PdfRotatePagesTask) -> PdfRotatePagesTask,
-    {
-        self.add_configured_task(PdfRotatePagesTask::new(input), configure)
-    }
+    graph_pdf_task_methods!(pdf_a, pdf_a_with, PdfATask);
+    graph_pdf_task_methods!(pdf_x, pdf_x_with, PdfXTask);
+    graph_pdf_task_methods!(pdf_ocr, pdf_ocr_with, PdfOcrTask);
+    graph_pdf_task_methods!(pdf_encrypt, pdf_encrypt_with, PdfEncryptTask);
+    graph_pdf_task_methods!(pdf_decrypt, pdf_decrypt_with, PdfDecryptTask);
+    graph_pdf_task_methods!(pdf_split_pages, pdf_split_pages_with, PdfSplitPagesTask);
+    graph_pdf_task_methods!(
+        pdf_extract_pages,
+        pdf_extract_pages_with,
+        PdfExtractPagesTask
+    );
+    graph_pdf_task_methods!(pdf_rotate_pages, pdf_rotate_pages_with, PdfRotatePagesTask);
 
     /// Adds an `export/url` task.
     pub fn export_url(&mut self, input: impl Into<Input>) -> TaskName {
@@ -2091,6 +1929,28 @@ pub enum JobStatus {
     Unknown,
 }
 
+impl JobStatus {
+    pub fn is_waiting(&self) -> bool {
+        matches!(self, Self::Waiting)
+    }
+
+    pub fn is_processing(&self) -> bool {
+        matches!(self, Self::Processing)
+    }
+
+    pub fn is_finished(&self) -> bool {
+        matches!(self, Self::Finished)
+    }
+
+    pub fn is_error(&self) -> bool {
+        matches!(self, Self::Error)
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Finished | Self::Error)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -2102,6 +1962,32 @@ pub enum TaskStatus {
     Error,
     #[serde(other)]
     Unknown,
+}
+
+impl TaskStatus {
+    pub fn is_waiting(&self) -> bool {
+        matches!(self, Self::Waiting)
+    }
+
+    pub fn is_queued(&self) -> bool {
+        matches!(self, Self::Queued)
+    }
+
+    pub fn is_processing(&self) -> bool {
+        matches!(self, Self::Processing)
+    }
+
+    pub fn is_finished(&self) -> bool {
+        matches!(self, Self::Finished)
+    }
+
+    pub fn is_error(&self) -> bool {
+        matches!(self, Self::Error)
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Finished | Self::Error)
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -2126,12 +2012,29 @@ pub struct Job {
 }
 
 impl Job {
+    pub fn is_finished(&self) -> bool {
+        self.status.is_finished()
+    }
+
+    pub fn is_error(&self) -> bool {
+        self.status.is_error()
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        self.status.is_terminal()
+    }
+
+    pub fn export_tasks(&self) -> impl Iterator<Item = &JobTask> {
+        self.tasks.iter().filter(|task| task.is_export_url())
+    }
+
+    pub fn finished_export_tasks(&self) -> impl Iterator<Item = &JobTask> {
+        self.export_tasks().filter(|task| task.is_finished())
+    }
+
     pub fn export_urls(&self) -> Vec<&FileResult> {
-        self.tasks
-            .iter()
-            .filter(|task| task.operation == "export/url" && task.status == TaskStatus::Finished)
-            .filter_map(|task| task.result.as_ref())
-            .flat_map(|result| result.files.iter())
+        self.finished_export_tasks()
+            .flat_map(JobTask::files)
             .collect()
     }
 }
@@ -2178,6 +2081,31 @@ pub struct JobTask {
     pub payload: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl JobTask {
+    pub fn is_finished(&self) -> bool {
+        self.status.is_finished()
+    }
+
+    pub fn is_error(&self) -> bool {
+        self.status.is_error()
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        self.status.is_terminal()
+    }
+
+    pub fn is_export_url(&self) -> bool {
+        self.operation == "export/url"
+    }
+
+    pub fn files(&self) -> impl Iterator<Item = &FileResult> {
+        self.result
+            .as_ref()
+            .into_iter()
+            .flat_map(|result| result.files.iter())
+    }
 }
 
 impl fmt::Debug for JobTask {
@@ -2228,6 +2156,42 @@ pub struct Task {
     pub payload: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Task {
+    pub fn is_finished(&self) -> bool {
+        self.status.is_finished()
+    }
+
+    pub fn is_error(&self) -> bool {
+        self.status.is_error()
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        self.status.is_terminal()
+    }
+
+    pub fn is_import_upload(&self) -> bool {
+        self.operation == "import/upload"
+    }
+
+    pub fn upload_form(&self) -> Option<&UploadForm> {
+        self.result
+            .as_ref()
+            .and_then(|result| result.form.as_ref())
+            .filter(|_| self.is_import_upload())
+    }
+
+    pub fn is_upload_ready(&self) -> bool {
+        self.upload_form().is_some()
+    }
+
+    pub fn files(&self) -> impl Iterator<Item = &FileResult> {
+        self.result
+            .as_ref()
+            .into_iter()
+            .flat_map(|result| result.files.iter())
+    }
 }
 
 impl fmt::Debug for Task {

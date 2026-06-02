@@ -238,6 +238,8 @@ typed request/response models from the crate root.
   `transport_config(...)` allow custom transport setup.
 - The optional `retry` feature exposes `RetryPolicy` for transient HTTP status
   retries.
+- The optional `socket` feature exposes a managed Socket.io client for
+  event-driven waits.
 
 ### REST resources
 
@@ -245,10 +247,15 @@ Jobs:
 
 - `POST /v2/jobs` via `jobs().create(...)` for async job creation.
 - `POST /v2/jobs` on the synchronous API base via `jobs().create_and_wait(...)`.
+- With the `socket` feature, `jobs().create_and_wait_socket(...)` creates a job,
+  subscribes to its Socket.io channel, and returns when CloudConvert emits a
+  terminal event.
 - `GET /v2/jobs` via `jobs().list(...)` and `jobs().list_page(...)`.
 - `GET /v2/jobs/{id}` via `jobs().get(...)` and `jobs().get_with_query(...)`.
 - `GET /v2/jobs/{id}` on the synchronous API base via `jobs().wait(...)` and
   `jobs().wait_with_query(...)`.
+- With the `socket` feature, `jobs().wait_socket(...)` waits for a job through
+  Socket.io events instead of the synchronous API base.
 - `jobs().get_redirect_url(...)`, `jobs().wait_redirect_url(...)`, and
   `jobs().create_and_wait_redirect_url(...)` expose CloudConvert redirect
   helpers for `export/url` outputs.
@@ -262,6 +269,8 @@ Tasks:
 - `GET /v2/tasks/{id}` via `tasks().get(...)` and `tasks().get_with_query(...)`.
 - `GET /v2/tasks/{id}` on the synchronous API base via `tasks().wait(...)` and
   `tasks().wait_with_query(...)`.
+- With the `socket` feature, `tasks().wait_socket(...)` waits for a task through
+  Socket.io events.
 - `POST /v2/tasks/{id}/cancel` via `tasks().cancel(...)`.
 - `POST /v2/tasks/{id}/retry` via `tasks().retry(...)`.
 - `DELETE /v2/tasks/{id}` via `tasks().delete(...)`.
@@ -287,7 +296,8 @@ Helpers:
 - `sign_job_url(...)` creates signed URLs for job templates.
 - `socket_base_url(...)`, `socket_subscription(...)`, `SocketChannel`,
   `JobSocketEvent`, and `TaskSocketEvent` model CloudConvert Socket.io payloads.
-  The crate does not include a Socket.io runtime client.
+- With the `socket` feature, `CloudConvertSocket` and `SocketEvent` manage the
+  Socket.io connection and decode job/task event payloads.
 
 ### Typed task builders
 
@@ -445,6 +455,48 @@ let client = CloudConvertClient::builder(ApiKey::from_env()?)
 
 Retry covers transient API statuses `429`, `500`, `502`, `503`, and `504`, plus
 connect and timeout errors. `Retry-After` seconds are respected by default.
+
+Retry applies to CloudConvert API and synchronous API requests. Signed
+`import/upload` form submissions and `export/url` downloads use storage URLs
+returned by CloudConvert and are kept as a separate transport boundary.
+
+## Socket.io Waits
+
+CloudConvert also publishes job and task lifecycle events over Socket.io. This
+is useful when an async application wants lower-latency completion than periodic
+polling, but does not want to expose a public webhook receiver.
+
+Enable the optional feature:
+
+```toml
+cloudconvert-sdk = { version = "0.1", features = ["socket"] }
+```
+
+Then use the managed wait helpers:
+
+```rust
+use cloudconvert_sdk::{ApiKey, CloudConvertClient, FileExtension, JobCreateRequest};
+
+# async fn run() -> cloudconvert_sdk::Result<()> {
+let client = CloudConvertClient::builder(ApiKey::from_env()?).build()?;
+let request = JobCreateRequest::linear()
+    .import_url("https://example.test/input.docx")
+    .convert(FileExtension::Pdf)
+    .export_url()
+    .build();
+
+let finished = client.jobs().create_and_wait_socket(request).await?;
+for file in finished.export_urls() {
+    println!("{}", file.filename);
+}
+# Ok(())
+# }
+```
+
+The SDK connects, subscribes, checks the current resource state to avoid missing
+fast completions, waits for a terminal Socket.io event, and disconnects. Prefer
+webhooks for production workflows where CloudConvert can call your service
+directly.
 
 ## Build Tasks
 

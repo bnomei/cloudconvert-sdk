@@ -34,6 +34,9 @@ use crate::{
     tasks::TaskRequest,
 };
 
+#[cfg(feature = "socket")]
+use crate::socket::CloudConvertSocket;
+
 #[derive(Clone, Debug)]
 pub struct CloudConvertClient {
     config: Arc<CloudConvertConfig>,
@@ -98,6 +101,17 @@ impl CloudConvertClient {
 
     pub fn socket_subscription(&self, channel: SocketChannel) -> SocketSubscription {
         SocketSubscription::new(channel.name().into_owned(), self.config.api_key.expose())
+    }
+
+    #[cfg(feature = "socket")]
+    pub async fn socket(
+        &self,
+        channels: impl IntoIterator<Item = SocketChannel>,
+    ) -> Result<CloudConvertSocket> {
+        let subscriptions = channels
+            .into_iter()
+            .map(|channel| self.socket_subscription(channel));
+        CloudConvertSocket::connect(self.socket_base_url(), subscriptions).await
     }
 
     pub async fn download(&self, url: impl AsRef<str>) -> Result<Bytes> {
@@ -224,11 +238,7 @@ impl CloudConvertClient {
     }
 
     fn upload_form(task: &Task) -> Result<&UploadForm> {
-        task.result
-            .as_ref()
-            .and_then(|result| result.form.as_ref())
-            .filter(|_| task.operation == "import/upload")
-            .ok_or(Error::UploadTaskNotReady)
+        task.upload_form().ok_or(Error::UploadTaskNotReady)
     }
 
     async fn get_response<T>(&self, base: &Url, path: &str) -> Result<ApiResponse<T>>
@@ -567,6 +577,19 @@ impl JobsResource {
         Ok(self.create_and_wait_response(request).await?.data)
     }
 
+    #[cfg(feature = "socket")]
+    pub async fn create_and_wait_socket(
+        &self,
+        request: impl Into<JobCreateRequest>,
+    ) -> Result<Job> {
+        let job = self.create(request).await?;
+        if job.is_terminal() {
+            return Ok(job);
+        }
+
+        self.wait_socket(&job.id).await
+    }
+
     pub async fn create_and_wait_response(
         &self,
         request: impl Into<JobCreateRequest>,
@@ -631,6 +654,37 @@ impl JobsResource {
 
     pub async fn wait(&self, id: impl AsRef<str>) -> Result<Job> {
         Ok(self.wait_response(id).await?.data)
+    }
+
+    #[cfg(feature = "socket")]
+    pub async fn wait_socket(&self, id: impl AsRef<str>) -> Result<Job> {
+        let id = resource_id(id.as_ref())?.to_string();
+        let mut socket = self.client.socket([SocketChannel::job(id.clone())]).await?;
+        let current = self.get(&id).await?;
+        if current.is_terminal() {
+            let _ = socket.disconnect().await;
+            return Ok(current);
+        }
+
+        loop {
+            let event = socket
+                .next_event()
+                .await
+                .ok_or_else(|| Error::Socket(format!("socket closed before job {id} completed")))?;
+
+            if !event.is_job_event() || !event.is_terminal() {
+                continue;
+            }
+
+            let job = match event.job()? {
+                Some(job) if job.id == id => job,
+                Some(_) => continue,
+                None => self.get(&id).await?,
+            };
+
+            let _ = socket.disconnect().await;
+            return Ok(job);
+        }
     }
 
     pub async fn wait_response(&self, id: impl AsRef<str>) -> Result<ApiResponse<Job>> {
@@ -744,6 +798,39 @@ impl TasksResource {
 
     pub async fn wait(&self, id: impl AsRef<str>) -> Result<Task> {
         Ok(self.wait_response(id).await?.data)
+    }
+
+    #[cfg(feature = "socket")]
+    pub async fn wait_socket(&self, id: impl AsRef<str>) -> Result<Task> {
+        let id = resource_id(id.as_ref())?.to_string();
+        let mut socket = self
+            .client
+            .socket([SocketChannel::task(id.clone())])
+            .await?;
+        let current = self.get(&id).await?;
+        if current.is_terminal() {
+            let _ = socket.disconnect().await;
+            return Ok(current);
+        }
+
+        loop {
+            let event = socket.next_event().await.ok_or_else(|| {
+                Error::Socket(format!("socket closed before task {id} completed"))
+            })?;
+
+            if !event.is_task_event() || !event.is_terminal() {
+                continue;
+            }
+
+            let task = match event.task()? {
+                Some(task) if task.id == id => task,
+                Some(_) => continue,
+                None => self.get(&id).await?,
+            };
+
+            let _ = socket.disconnect().await;
+            return Ok(task);
+        }
     }
 
     pub async fn wait_response(&self, id: impl AsRef<str>) -> Result<ApiResponse<Task>> {

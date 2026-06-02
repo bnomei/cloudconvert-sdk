@@ -49,6 +49,10 @@ pub enum Error {
 
     #[error("invalid CloudConvert region")]
     InvalidRegion,
+
+    #[cfg(feature = "socket")]
+    #[error("Socket.IO operation failed: {0}")]
+    Socket(String),
 }
 
 impl Error {

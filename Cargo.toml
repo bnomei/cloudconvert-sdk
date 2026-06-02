@@ -2,10 +2,12 @@
 name = "cloudconvert-sdk"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 
 [features]
 default = []
 retry = []
+socket = ["dep:rust_socketio"]
 
 [dependencies]
 base64 = "0.22.1"
@@ -14,6 +16,7 @@ futures-util = "0.3.32"
 hex = "0.4.3"
 hmac = "0.13.0"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "multipart", "stream", "rustls", "query"] }
+rust_socketio = { version = "0.6.0", features = ["async"], optional = true }
 secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

@@ -110,8 +110,10 @@ pub use jobs::{
 pub use operations::{Operation, OperationListQuery, OperationOption};
 pub use resources::{User, Webhook, WebhookCreateRequest, WebhookEvent, WebhookListQuery};
 pub use signed_url::sign_job_url;
+#[cfg(feature = "socket")]
+pub use socket::{CloudConvertSocket, SocketEvent};
 pub use socket::{
-    JobSocketEvent, SocketAuth, SocketChannel, SocketSubscription, TaskSocketEvent, socket_base_url,
+    JobSocketEvent, SocketChannel, SocketSubscription, TaskSocketEvent, socket_base_url,
 };
 pub use tasks::{
     ArchiveTask, AzureBlobExportTask, AzureBlobImportTask, Base64ImportTask, CaptureWebsiteTask,

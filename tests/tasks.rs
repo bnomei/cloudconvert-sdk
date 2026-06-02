@@ -245,6 +245,123 @@ fn task_name_arrays_serialize_as_multi_input() {
 }
 
 #[test]
+fn lifecycle_helpers_characterize_terminal_states_and_exports() {
+    let job: cloudconvert_sdk::Job = serde_json::from_value(json!({
+        "id": "job_1",
+        "status": "finished",
+        "tasks": [
+            {
+                "id": "task_import",
+                "name": "import-file",
+                "operation": "import/url",
+                "status": "finished"
+            },
+            {
+                "id": "task_export_waiting",
+                "name": "export-waiting",
+                "operation": "export/url",
+                "status": "waiting",
+                "result": {
+                    "files": [
+                        {
+                            "filename": "not-ready.pdf",
+                            "url": "https://storage.example.test/not-ready.pdf"
+                        }
+                    ]
+                }
+            },
+            {
+                "id": "task_export_finished",
+                "name": "export-finished",
+                "operation": "export/url",
+                "status": "finished",
+                "result": {
+                    "files": [
+                        {
+                            "filename": "ready.pdf",
+                            "url": "https://storage.example.test/ready.pdf"
+                        }
+                    ]
+                }
+            },
+            {
+                "id": "task_export_error",
+                "name": "export-error",
+                "operation": "export/url",
+                "status": "error"
+            }
+        ]
+    }))
+    .unwrap();
+
+    assert!(job.is_finished());
+    assert!(job.is_terminal());
+    assert_eq!(job.export_tasks().count(), 3);
+    assert_eq!(job.finished_export_tasks().count(), 1);
+    assert_eq!(job.export_urls()[0].filename, "ready.pdf");
+    assert!(job.tasks[1].status.is_waiting());
+    assert!(!job.tasks[1].is_terminal());
+    assert!(job.tasks[2].is_finished());
+    assert!(job.tasks[3].is_error());
+    assert!(job.tasks[3].is_terminal());
+
+    let unknown: cloudconvert_sdk::TaskStatus = serde_json::from_value(json!("paused")).unwrap();
+    assert_eq!(unknown, cloudconvert_sdk::TaskStatus::Unknown);
+    assert!(!unknown.is_terminal());
+}
+
+#[test]
+fn upload_readiness_helpers_require_import_upload_form() {
+    let ready: cloudconvert_sdk::Task = serde_json::from_value(json!({
+        "id": "task_upload",
+        "operation": "import/upload",
+        "status": "waiting",
+        "result": {
+            "form": {
+                "url": "https://storage.example.test/upload",
+                "parameters": {
+                    "signature": "fake-signature"
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    let wrong_operation: cloudconvert_sdk::Task = serde_json::from_value(json!({
+        "id": "task_import",
+        "operation": "import/url",
+        "status": "finished",
+        "result": {
+            "form": {
+                "url": "https://storage.example.test/upload",
+                "parameters": {}
+            }
+        }
+    }))
+    .unwrap();
+
+    let missing_form: cloudconvert_sdk::Task = serde_json::from_value(json!({
+        "id": "task_upload",
+        "operation": "import/upload",
+        "status": "waiting",
+        "result": {}
+    }))
+    .unwrap();
+
+    assert!(ready.is_import_upload());
+    assert!(ready.is_upload_ready());
+    assert_eq!(
+        ready.upload_form().unwrap().url,
+        "https://storage.example.test/upload"
+    );
+    assert!(!wrong_operation.is_import_upload());
+    assert!(!wrong_operation.is_upload_ready());
+    assert!(wrong_operation.upload_form().is_none());
+    assert!(missing_form.is_import_upload());
+    assert!(!missing_form.is_upload_ready());
+}
+
+#[test]
 fn job_builder_task_shorthands_update_inputs_after_explicit_tasks() {
     let job = JobCreateRequest::builder()
         .task(
