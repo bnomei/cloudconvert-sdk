@@ -205,39 +205,40 @@ use std::path::Path;
 
 use cloudconvert_sdk::{ApiKey, CloudConvertClient, FileExtension, JobCreateRequest};
 
-# async fn run() -> cloudconvert_sdk::Result<()> {
-let client = CloudConvertClient::builder(ApiKey::from_env()?).build()?;
-let request = JobCreateRequest::linear()
-    .import_upload()
-    .convert_with(FileExtension::Pdf, |task| {
-        task.input_format(FileExtension::Txt)
-    })
-    .export_url()
-    .build();
+async fn run() -> cloudconvert_sdk::Result<()> {
+    let client = CloudConvertClient::builder(ApiKey::from_env()?).build()?;
+    let request = JobCreateRequest::linear()
+        .import_upload()
+        .convert_with(FileExtension::Pdf, |task| {
+            task.input_format(FileExtension::Txt)
+        })
+        .export_url()
+        .build();
 
-let job = client.jobs().create(request).await?;
-let upload_task_id = job
-    .tasks
-    .iter()
-    .find(|task| task.operation == "import/upload")
-    .and_then(|task| task.id.as_deref())
-    .expect("import/upload task should have an id");
+    let job = client.jobs().create(request).await?;
+    let upload_task_id = job
+        .tasks
+        .iter()
+        .find(|task| task.operation == "import/upload")
+        .and_then(|task| task.id.as_deref())
+        .expect("import/upload task should have an id");
 
-let upload_task = client.tasks().get(upload_task_id).await?;
-client.upload_path(&upload_task, "input.txt").await?;
+    let upload_task = client.tasks().get(upload_task_id).await?;
+    client.upload_path(&upload_task, "input.txt").await?;
 
-let finished = client.jobs().wait(&job.id).await?;
-for file in finished.export_urls() {
-    if let Some(url) = &file.url {
-        let filename = Path::new(&file.filename)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("download");
-        client.download_to_path(url, Path::new("downloads").join(filename)).await?;
+    let finished = client.jobs().wait(&job.id).await?;
+    for file in finished.export_urls() {
+        if let Some(url) = &file.url {
+            let filename = Path::new(&file.filename)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("download");
+            client.download_to_path(url, Path::new("downloads").join(filename)).await?;
+        }
     }
+
+    Ok(())
 }
-# Ok(())
-# }
 ```
 
 Download helpers never attach CloudConvert bearer credentials to signed storage
@@ -279,23 +280,23 @@ use cloudconvert_sdk::{
     JobListQuery, OAuthClient, OAuthClientSecret, OAuthScope,
 };
 
-# async fn run() -> cloudconvert_sdk::Result<()> {
-let oauth = OAuthClient::new("client-id", OAuthClientSecret::new("client-secret"))?;
-let redirect = oauth.authorization_code_url_with_state(
-    "https://app.example.test/cloudconvert/callback",
-    [OAuthScope::TaskRead, OAuthScope::TaskWrite],
-    "state-from-your-app",
-)?;
+async fn run() -> cloudconvert_sdk::Result<()> {
+    let oauth = OAuthClient::new("client-id", OAuthClientSecret::new("client-secret"))?;
+    let redirect = oauth.authorization_code_url_with_state(
+        "https://app.example.test/cloudconvert/callback",
+        [OAuthScope::TaskRead, OAuthScope::TaskWrite],
+        "state-from-your-app",
+    )?;
 
-// Redirect the user to `redirect`, then exchange the returned code.
-let token = oauth
-    .exchange_code("authorization-code", "https://app.example.test/cloudconvert/callback")
-    .await?;
-let client = token.into_client_builder().build()?;
+    // Redirect the user to `redirect`, then exchange the returned code.
+    let token = oauth
+        .exchange_code("authorization-code", "https://app.example.test/cloudconvert/callback")
+        .await?;
+    let client = token.into_client_builder().build()?;
 
-let _jobs = client.jobs().list(&JobListQuery::default()).await?;
-# Ok(())
-# }
+    let _jobs = client.jobs().list(&JobListQuery::default()).await?;
+    Ok(())
+}
 ```
 
 `OAuthAccessToken`, `OAuthRefreshToken`, and `OAuthClientSecret` redact debug
@@ -310,19 +311,19 @@ For metadata-driven integrations, call `operations().list(...)` with
 ```rust
 use cloudconvert_sdk::{ConvertTask, OperationListQuery, TaskRequest};
 
-# async fn run(client: cloudconvert_sdk::CloudConvertClient) -> cloudconvert_sdk::Result<()> {
-let operation = client.operations().list(
-    &OperationListQuery::default()
-        .operation("convert")
-        .input_format("docx")
-        .output_format("pdf")
-        .include_options_and_engine_versions(),
-).await?.remove(0);
+async fn validate(client: cloudconvert_sdk::CloudConvertClient) -> cloudconvert_sdk::Result<()> {
+    let operation = client.operations().list(
+        &OperationListQuery::default()
+            .operation("convert")
+            .input_format("docx")
+            .output_format("pdf")
+            .include_options_and_engine_versions(),
+    ).await?.remove(0);
 
-let task = TaskRequest::from(ConvertTask::new("import-file", "pdf"));
-operation.validate_task(&task).expect("task should match operation metadata");
-# Ok(())
-# }
+    let task = TaskRequest::from(ConvertTask::new("import-file", "pdf"));
+    operation.validate_task(&task).expect("task should match operation metadata");
+    Ok(())
+}
 ```
 
 Use `option(...)` builder methods, `extra` maps, or `TaskRequest::custom(...)`
@@ -372,20 +373,21 @@ cloudconvert-sdk = { version = "0.1", features = ["socket"] }
 ```rust
 use cloudconvert_sdk::{ApiKey, CloudConvertClient, FileExtension, JobCreateRequest};
 
-# async fn run() -> cloudconvert_sdk::Result<()> {
-let client = CloudConvertClient::builder(ApiKey::from_env()?).build()?;
-let request = JobCreateRequest::linear()
-    .import_url("https://example.test/input.docx")
-    .convert(FileExtension::Pdf)
-    .export_url()
-    .build();
+async fn run() -> cloudconvert_sdk::Result<()> {
+    let client = CloudConvertClient::builder(ApiKey::from_env()?).build()?;
+    let request = JobCreateRequest::linear()
+        .import_url("https://example.test/input.docx")
+        .convert(FileExtension::Pdf)
+        .export_url()
+        .build();
 
-let finished = client.jobs().create_and_wait_socket(request).await?;
-for file in finished.export_urls() {
-    println!("{}", file.filename);
+    let finished = client.jobs().create_and_wait_socket(request).await?;
+    for file in finished.export_urls() {
+        println!("{}", file.filename);
+    }
+
+    Ok(())
 }
-# Ok(())
-# }
 ```
 
 The managed wait helpers subscribe, check the current resource state to avoid

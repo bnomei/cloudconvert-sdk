@@ -3,6 +3,25 @@ name = "cloudconvert-sdk"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
+description = "Async Rust SDK primitives for the CloudConvert API v2."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/bnomei/cloudconvert-sdk"
+documentation = "https://docs.rs/cloudconvert-sdk"
+categories = [
+    "api-bindings",
+    "asynchronous",
+    "web-programming",
+    "network-programming",
+    "authentication",
+]
+keywords = [
+    "cloudconvert",
+    "file-conversion",
+    "api-client",
+    "pdf",
+    "oauth",
+]
 
 [features]
 default = []
