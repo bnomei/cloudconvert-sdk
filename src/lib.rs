@@ -84,6 +84,7 @@ mod config;
 mod error;
 mod file_extension;
 mod jobs;
+mod oauth;
 mod operations;
 mod resources;
 mod signed_url;
@@ -98,7 +99,8 @@ pub use client::{
 #[cfg(feature = "retry")]
 pub use config::RetryPolicy;
 pub use config::{
-    ApiKey, ClientBuilder, CloudConvertConfig, Region, SigningSecret, TransportConfig,
+    ApiKey, ClientBuilder, CloudConvertConfig, OAuthAccessToken, OAuthClientSecret,
+    OAuthRefreshToken, Region, SigningSecret, TransportConfig,
 };
 pub use error::{ApiError, Error, Result};
 pub use file_extension::{FileExtension, ParseFileExtensionError};
@@ -107,13 +109,19 @@ pub use jobs::{
     JobListQuery, JobStatus, JobTask, Page, PaginationLinks, PaginationMeta, RateLimit, Task,
     TaskGetQuery, TaskListQuery, TaskName, TaskResult, TaskStatus, UploadForm,
 };
-pub use operations::{Operation, OperationListQuery, OperationOption};
+pub use oauth::{OAuthClient, OAuthScope, OAuthTokenResponse};
+pub use operations::{
+    Operation, OperationEngineVersion, OperationListQuery, OperationOption, OperationOptionKind,
+    OperationValidationError, OperationValidationErrorKind, OperationValidationMode,
+    OperationValidationResult,
+};
 pub use resources::{User, Webhook, WebhookCreateRequest, WebhookEvent, WebhookListQuery};
 pub use signed_url::sign_job_url;
 #[cfg(feature = "socket")]
 pub use socket::{CloudConvertSocket, SocketEvent};
 pub use socket::{
-    JobSocketEvent, SocketChannel, SocketSubscription, TaskSocketEvent, socket_base_url,
+    JobSocketEvent, SocketChannel, SocketEventKind, SocketSubscription, TaskSocketEvent,
+    socket_base_url,
 };
 pub use tasks::{
     ArchiveTask, AzureBlobExportTask, AzureBlobImportTask, Base64ImportTask, CaptureWebsiteTask,

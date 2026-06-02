@@ -3,9 +3,9 @@ use std::time::Duration;
 #[cfg(feature = "retry")]
 use cloudconvert_sdk::RetryPolicy;
 use cloudconvert_sdk::{
-    ApiKey, CloudConvertClient, Error, ExportUploadTask, JobCreateRequest, Region, S3ImportTask,
-    SigningSecret, Task, TaskRequest, TransportConfig, User, Webhook, sign_job_url, sign_payload,
-    verify_signature,
+    ApiKey, CloudConvertClient, Error, ExportUploadTask, JobCreateRequest, OAuthAccessToken,
+    OAuthClientSecret, OAuthRefreshToken, Region, S3ImportTask, SigningSecret, Task, TaskRequest,
+    TransportConfig, User, Webhook, sign_job_url, sign_payload, verify_signature,
 };
 use serde_json::json;
 use url::Url;
@@ -20,6 +20,19 @@ fn client_config_debug_redacts_api_key() {
 
     assert!(debug.contains("REDACTED"));
     assert!(!debug.contains("cc_test_fake_secret_key"));
+}
+
+#[test]
+fn client_config_debug_redacts_oauth_access_token() {
+    let client =
+        CloudConvertClient::builder_with_access_token(OAuthAccessToken::new("oauth_secret_token"))
+            .build()
+            .unwrap();
+
+    let debug = format!("{:?}", client.config());
+
+    assert!(debug.contains("REDACTED"));
+    assert!(!debug.contains("oauth_secret_token"));
 }
 
 #[test]
@@ -183,9 +196,15 @@ fn retry_policy_accessors_expose_builder_values() {
 #[test]
 fn secret_debug_output_is_redacted() {
     let api_key = ApiKey::new("cc_test_fake_secret_key");
+    let access_token = OAuthAccessToken::new("oauth_test_fake_access_token");
+    let refresh_token = OAuthRefreshToken::new("oauth_test_fake_refresh_token");
+    let client_secret = OAuthClientSecret::new("oauth_test_fake_client_secret");
     let signing_secret = SigningSecret::new("whsec_test_fake_secret");
 
     assert_eq!(format!("{api_key:?}"), "ApiKey(REDACTED)");
+    assert_eq!(format!("{access_token:?}"), "OAuthAccessToken(REDACTED)");
+    assert_eq!(format!("{refresh_token:?}"), "OAuthRefreshToken(REDACTED)");
+    assert_eq!(format!("{client_secret:?}"), "OAuthClientSecret(REDACTED)");
     assert_eq!(format!("{signing_secret:?}"), "SigningSecret(REDACTED)");
 }
 

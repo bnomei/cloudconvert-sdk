@@ -1,9 +1,12 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use std::{error::Error as StdError, fmt};
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::file_extension::normalize_file_extension;
+use crate::tasks::TaskRequest;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct OperationListQuery {
@@ -108,20 +111,109 @@ pub struct Operation {
     #[serde(default)]
     pub engine_version: Option<String>,
     #[serde(default)]
-    pub options: Option<BTreeMap<String, OperationOption>>,
-    #[serde(default)]
-    pub engine_versions: Vec<String>,
+    pub credits: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_options")]
+    pub options: BTreeMap<String, OperationOption>,
+    #[serde(default, deserialize_with = "deserialize_engine_versions")]
+    pub engine_versions: Vec<OperationEngineVersion>,
     #[serde(default)]
     pub alternatives: Vec<Operation>,
+    #[serde(default)]
+    pub deprecated: Option<bool>,
+    #[serde(default)]
+    pub experimental: Option<bool>,
+    #[serde(default)]
+    pub meta: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Operation {
+    pub fn option(&self, name: &str) -> Option<&OperationOption> {
+        self.options.get(name)
+    }
+
+    pub fn options(&self) -> impl Iterator<Item = (&str, &OperationOption)> {
+        self.options
+            .iter()
+            .map(|(name, option)| (name.as_str(), option))
+    }
+
+    pub fn engine_version_values(&self) -> impl Iterator<Item = &str> {
+        self.engine_versions
+            .iter()
+            .map(|version| version.version.as_str())
+    }
+
+    pub fn default_engine_version(&self) -> Option<&OperationEngineVersion> {
+        self.engine_versions
+            .iter()
+            .find(|version| version.default.unwrap_or(false))
+    }
+
+    pub fn latest_engine_version(&self) -> Option<&OperationEngineVersion> {
+        self.engine_versions
+            .iter()
+            .find(|version| version.latest.unwrap_or(false))
+    }
+
+    pub fn validate_task(&self, task: &TaskRequest) -> OperationValidationResult {
+        self.validate_task_with_mode(task, OperationValidationMode::Lenient)
+    }
+
+    pub fn validate_task_strict(&self, task: &TaskRequest) -> OperationValidationResult {
+        self.validate_task_with_mode(task, OperationValidationMode::Strict)
+    }
+
+    pub fn validate_task_with_mode(
+        &self,
+        task: &TaskRequest,
+        mode: OperationValidationMode,
+    ) -> OperationValidationResult {
+        if task.operation() != self.operation {
+            return Err(OperationValidationError::operation_mismatch(
+                &self.operation,
+                task.operation(),
+            ));
+        }
+
+        for (name, option) in &self.options {
+            let value = task.payload().get(name);
+            if option.required.unwrap_or(false) && value.is_none_or(Value::is_null) {
+                return Err(OperationValidationError::missing_required(
+                    &self.operation,
+                    name,
+                ));
+            }
+
+            let Some(value) = value else {
+                continue;
+            };
+            option.validate_value_for_operation(&self.operation, name, value)?;
+        }
+
+        if matches!(mode, OperationValidationMode::Strict) && !self.options.is_empty() {
+            for name in task.payload().keys() {
+                if !self.options.contains_key(name) && !is_common_task_field(name) {
+                    return Err(OperationValidationError::unknown_option(
+                        &self.operation,
+                        name,
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct OperationOption {
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default, rename = "type")]
-    pub kind: Option<String>,
+    pub kind: Option<OperationOptionKind>,
     #[serde(default)]
     pub label: Option<String>,
     #[serde(default)]
@@ -130,8 +222,348 @@ pub struct OperationOption {
     pub required: Option<bool>,
     #[serde(default)]
     pub default: Option<Value>,
-    #[serde(default)]
-    pub values: Vec<Value>,
+    #[serde(default, alias = "values")]
+    pub possible_values: Vec<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl OperationOption {
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn kind(&self) -> Option<&OperationOptionKind> {
+        self.kind.as_ref()
+    }
+
+    pub fn is_required(&self) -> bool {
+        self.required.unwrap_or(false)
+    }
+
+    pub fn possible_values(&self) -> &[Value] {
+        &self.possible_values
+    }
+
+    pub fn validate_value(&self, value: &Value) -> OperationValidationResult {
+        self.validate_value_for_operation("", self.name.as_deref().unwrap_or("option"), value)
+    }
+
+    fn validate_value_for_operation(
+        &self,
+        operation: &str,
+        name: &str,
+        value: &Value,
+    ) -> OperationValidationResult {
+        if let Some(kind) = &self.kind
+            && !kind.matches_value(value)
+        {
+            return Err(OperationValidationError::invalid_type(
+                operation,
+                name,
+                kind.as_str(),
+                value_type(value),
+            ));
+        }
+
+        if !self.possible_values.is_empty()
+            && !self.possible_values.iter().any(|allowed| allowed == value)
+        {
+            return Err(OperationValidationError::invalid_value(
+                operation,
+                name,
+                "one of the documented possible_values",
+                value,
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OperationOptionKind {
+    String,
+    Boolean,
+    Integer,
+    Float,
+    Enum,
+    Dictionary,
+    Array,
+    Other(String),
+}
+
+impl OperationOptionKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::String => "string",
+            Self::Boolean => "boolean",
+            Self::Integer => "integer",
+            Self::Float => "float",
+            Self::Enum => "enum",
+            Self::Dictionary => "dictionary",
+            Self::Array => "array",
+            Self::Other(value) => value.as_str(),
+        }
+    }
+
+    fn matches_value(&self, value: &Value) -> bool {
+        match self {
+            Self::String => value.is_string(),
+            Self::Boolean => value.is_boolean(),
+            Self::Integer => value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+                .is_some(),
+            Self::Float => value.is_number(),
+            Self::Enum => value.is_string(),
+            Self::Dictionary => value.is_object(),
+            Self::Array => value.is_array(),
+            Self::Other(_) => true,
+        }
+    }
+}
+
+impl Serialize for OperationOptionKind {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for OperationOptionKind {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "string" => Self::String,
+            "boolean" => Self::Boolean,
+            "integer" => Self::Integer,
+            "float" => Self::Float,
+            "enum" => Self::Enum,
+            "dictionary" => Self::Dictionary,
+            "array" => Self::Array,
+            _ => Self::Other(value),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct OperationEngineVersion {
+    pub version: String,
+    #[serde(default)]
+    pub default: Option<bool>,
+    #[serde(default)]
+    pub latest: Option<bool>,
+    #[serde(default)]
+    pub deprecated: Option<bool>,
+    #[serde(default)]
+    pub experimental: Option<bool>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OperationValidationMode {
+    Lenient,
+    Strict,
+}
+
+pub type OperationValidationResult = std::result::Result<(), OperationValidationError>;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationValidationError {
+    pub kind: OperationValidationErrorKind,
+    pub operation: String,
+    pub option: Option<String>,
+    pub expected: Option<String>,
+    pub actual: Option<String>,
+}
+
+impl OperationValidationError {
+    fn operation_mismatch(expected: &str, actual: &str) -> Self {
+        Self {
+            kind: OperationValidationErrorKind::OperationMismatch,
+            operation: expected.to_string(),
+            option: None,
+            expected: Some(expected.to_string()),
+            actual: Some(actual.to_string()),
+        }
+    }
+
+    fn missing_required(operation: &str, option: &str) -> Self {
+        Self {
+            kind: OperationValidationErrorKind::MissingRequiredOption,
+            operation: operation.to_string(),
+            option: Some(option.to_string()),
+            expected: Some("present value".to_string()),
+            actual: Some("missing".to_string()),
+        }
+    }
+
+    fn invalid_type(operation: &str, option: &str, expected: &str, actual: &str) -> Self {
+        Self {
+            kind: OperationValidationErrorKind::InvalidOptionType,
+            operation: operation.to_string(),
+            option: Some(option.to_string()),
+            expected: Some(expected.to_string()),
+            actual: Some(actual.to_string()),
+        }
+    }
+
+    fn invalid_value(operation: &str, option: &str, expected: &str, actual: &Value) -> Self {
+        Self {
+            kind: OperationValidationErrorKind::InvalidOptionValue,
+            operation: operation.to_string(),
+            option: Some(option.to_string()),
+            expected: Some(expected.to_string()),
+            actual: Some(actual.to_string()),
+        }
+    }
+
+    fn unknown_option(operation: &str, option: &str) -> Self {
+        Self {
+            kind: OperationValidationErrorKind::UnknownOption,
+            operation: operation.to_string(),
+            option: Some(option.to_string()),
+            expected: Some("documented operation option".to_string()),
+            actual: Some("unknown option".to_string()),
+        }
+    }
+}
+
+impl fmt::Display for OperationValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.option {
+            Some(option) => write!(
+                formatter,
+                "operation {} option {} failed validation: expected {}, got {}",
+                self.operation,
+                option,
+                self.expected.as_deref().unwrap_or("valid value"),
+                self.actual.as_deref().unwrap_or("invalid value")
+            ),
+            None => write!(
+                formatter,
+                "operation {} failed validation: expected {}, got {}",
+                self.operation,
+                self.expected.as_deref().unwrap_or("valid value"),
+                self.actual.as_deref().unwrap_or("invalid value")
+            ),
+        }
+    }
+}
+
+impl StdError for OperationValidationError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OperationValidationErrorKind {
+    OperationMismatch,
+    MissingRequiredOption,
+    InvalidOptionType,
+    InvalidOptionValue,
+    UnknownOption,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OperationOptionsWire {
+    Map(BTreeMap<String, OperationOption>),
+    List(Vec<OperationOption>),
+}
+
+fn deserialize_options<'de, D>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, OperationOption>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let wire = Option::<OperationOptionsWire>::deserialize(deserializer)?;
+    let mut options = BTreeMap::new();
+
+    match wire {
+        Some(OperationOptionsWire::Map(map)) => {
+            for (name, mut option) in map {
+                if option.name.is_none() {
+                    option.name = Some(name.clone());
+                }
+                options.insert(name, option);
+            }
+        }
+        Some(OperationOptionsWire::List(list)) => {
+            for option in list {
+                if let Some(name) = option.name.clone() {
+                    options.insert(name, option);
+                }
+            }
+        }
+        None => {}
+    }
+
+    Ok(options)
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OperationEngineVersionWire {
+    String(String),
+    Object(OperationEngineVersion),
+}
+
+fn deserialize_engine_versions<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<OperationEngineVersion>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let wire = Option::<Vec<OperationEngineVersionWire>>::deserialize(deserializer)?;
+    Ok(wire
+        .unwrap_or_default()
+        .into_iter()
+        .map(|version| match version {
+            OperationEngineVersionWire::String(version) => OperationEngineVersion {
+                version,
+                default: None,
+                latest: None,
+                deprecated: None,
+                experimental: None,
+                extra: BTreeMap::new(),
+            },
+            OperationEngineVersionWire::Object(version) => version,
+        })
+        .collect())
+}
+
+fn is_common_task_field(name: &str) -> bool {
+    matches!(
+        name,
+        "input"
+            | "ignore_error"
+            | "input_format"
+            | "output_format"
+            | "engine"
+            | "engine_version"
+            | "filename"
+            | "timeout"
+    )
+}
+
+fn value_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(number) if number.is_i64() || number.is_u64() => "integer",
+        Value::Number(_) => "float",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "dictionary",
+    }
 }

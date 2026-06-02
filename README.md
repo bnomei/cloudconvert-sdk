@@ -231,6 +231,10 @@ typed request/response models from the crate root.
 
 - `CloudConvertClient::builder(ApiKey)` creates clients for live API usage.
 - `ApiKey::from_env()` reads `CLOUDCONVERT_API_KEY`.
+- `OAuthClient` builds CloudConvert OAuth authorization URLs and exchanges or
+  refreshes OAuth tokens.
+- `CloudConvertClient::builder_with_access_token(OAuthAccessToken)` creates API
+  clients from OAuth access tokens.
 - `sandbox(true)` switches to CloudConvert sandbox endpoints.
 - `region(Region::EuCentral | Region::UsEast | Region::Custom(_))` selects a
   region-specific API base.
@@ -279,6 +283,8 @@ Other resources:
 
 - `GET /v2/operations` via `operations().list(...)` and
   `operations().list_page(...)`.
+- Operation metadata includes option kinds, possible values, engine versions, and
+  opt-in `Operation::validate_task(...)` helpers.
 - `GET /v2/users/me` via `users().me()`.
 - `POST /v2/webhooks` via `webhooks().create(...)`.
 - `GET /v2/users/me/webhooks` via `webhooks().list(...)` and
@@ -295,7 +301,8 @@ Helpers:
 - `sign_payload(...)` and `verify_signature(...)` handle webhook signatures.
 - `sign_job_url(...)` creates signed URLs for job templates.
 - `socket_base_url(...)`, `socket_subscription(...)`, `SocketChannel`,
-  `JobSocketEvent`, and `TaskSocketEvent` model CloudConvert Socket.io payloads.
+  `JobSocketEvent`, `TaskSocketEvent`, and `SocketEventKind` model CloudConvert
+  Socket.io payloads.
 - With the `socket` feature, `CloudConvertSocket` and `SocketEvent` manage the
   Socket.io connection and decode job/task event payloads.
 
@@ -412,6 +419,39 @@ Format setters still accept strings for forward compatibility. Those string
 inputs are normalized by trimming leading dots and using lowercase, so `.PDF`
 and `PDF` serialize as `pdf`.
 
+## OAuth 2.0
+
+Use API keys for server-side integrations owned by one CloudConvert account. Use
+OAuth when your app acts on behalf of CloudConvert users.
+
+```rust
+use cloudconvert_sdk::{
+    JobListQuery, OAuthClient, OAuthClientSecret, OAuthScope,
+};
+
+# async fn run() -> cloudconvert_sdk::Result<()> {
+let oauth = OAuthClient::new("client-id", OAuthClientSecret::new("client-secret"))?;
+let redirect = oauth.authorization_code_url_with_state(
+    "https://app.example.test/cloudconvert/callback",
+    [OAuthScope::TaskRead, OAuthScope::TaskWrite],
+    "state-from-your-app",
+)?;
+
+// Redirect the user to `redirect`, then exchange the returned code.
+let token = oauth
+    .exchange_code("authorization-code", "https://app.example.test/cloudconvert/callback")
+    .await?;
+let client = token.into_client_builder().build()?;
+
+let _jobs = client.jobs().list(&JobListQuery::default()).await?;
+# Ok(())
+# }
+```
+
+`OAuthAccessToken`, `OAuthRefreshToken`, and `OAuthClientSecret` redact their
+debug output. OAuth-backed clients use the same SDK resources and Socket.io
+subscription helpers as API-key clients.
+
 ## Extensibility
 
 CloudConvert exposes many engine-specific options. This crate types the common
@@ -422,8 +462,27 @@ The `TaskPayload` trait is sealed for SDK-owned typed task builders. Downstream
 code that needs a new operation should use `TaskRequest::custom(...)` until the
 crate adds a first-class builder.
 
-OAuth 2.0 is not implemented yet. The current SDK uses API keys for server-side
-application code.
+For metadata-driven integrations, call `operations().list(...)` with
+`include_options()` or `include_options_and_engine_versions()`. The returned
+`Operation` can validate a `TaskRequest` before sending it:
+
+```rust
+use cloudconvert_sdk::{ConvertTask, OperationListQuery, TaskRequest};
+
+# async fn run(client: cloudconvert_sdk::CloudConvertClient) -> cloudconvert_sdk::Result<()> {
+let operation = client.operations().list(
+    &OperationListQuery::default()
+        .operation("convert")
+        .input_format("docx")
+        .output_format("pdf")
+        .include_options_and_engine_versions(),
+).await?.remove(0);
+
+let task = TaskRequest::from(ConvertTask::new("import-file", "pdf"));
+operation.validate_task(&task).expect("task should match operation metadata");
+# Ok(())
+# }
+```
 
 ## Transport And Retry
 
@@ -497,6 +556,12 @@ The SDK connects, subscribes, checks the current resource state to avoid missing
 fast completions, waits for a terminal Socket.io event, and disconnects. Prefer
 webhooks for production workflows where CloudConvert can call your service
 directly.
+
+For event streams instead of one-shot waits, use `client.socket(...)` with any
+`SocketChannel`, `jobs().task_events_socket(job_id)` for all task events in a
+job, or `users().events_socket()` for user-wide job and task events. User-wide
+helpers fetch `users/me` and subscribe to the correct private channels under the
+hood.
 
 ## Build Tasks
 

@@ -22,7 +22,7 @@ use url::Url;
 
 use crate::{
     Result,
-    config::{ApiKey, ClientBuilder, CloudConvertConfig},
+    config::{ApiKey, ClientBuilder, CloudConvertConfig, OAuthAccessToken},
     error::{ApiErrorBody, Error},
     jobs::{
         ApiResponse, DataEnvelope, Job, JobCreateRequest, JobGetQuery, JobListQuery, Page,
@@ -47,6 +47,10 @@ pub struct CloudConvertClient {
 impl CloudConvertClient {
     pub fn builder(api_key: ApiKey) -> ClientBuilder {
         ClientBuilder::new(api_key)
+    }
+
+    pub fn builder_with_access_token(access_token: OAuthAccessToken) -> ClientBuilder {
+        ClientBuilder::new_with_access_token(access_token)
     }
 
     pub(crate) fn from_parts(
@@ -100,7 +104,7 @@ impl CloudConvertClient {
     }
 
     pub fn socket_subscription(&self, channel: SocketChannel) -> SocketSubscription {
-        SocketSubscription::new(channel.name().into_owned(), self.config.api_key.expose())
+        SocketSubscription::new(channel.name().into_owned(), self.config.credential.expose())
     }
 
     #[cfg(feature = "socket")]
@@ -112,6 +116,18 @@ impl CloudConvertClient {
             .into_iter()
             .map(|channel| self.socket_subscription(channel));
         CloudConvertSocket::connect(self.socket_base_url(), subscriptions).await
+    }
+
+    #[cfg(feature = "socket")]
+    pub async fn socket_with_buffer(
+        &self,
+        channels: impl IntoIterator<Item = SocketChannel>,
+        buffer: usize,
+    ) -> Result<CloudConvertSocket> {
+        let subscriptions = channels
+            .into_iter()
+            .map(|channel| self.socket_subscription(channel));
+        CloudConvertSocket::connect_with_buffer(self.socket_base_url(), subscriptions, buffer).await
     }
 
     pub async fn download(&self, url: impl AsRef<str>) -> Result<Bytes> {
@@ -250,7 +266,7 @@ impl CloudConvertClient {
             .send_api(|| {
                 self.http
                     .request(Method::GET, url.clone())
-                    .bearer_auth(self.config.api_key.expose())
+                    .bearer_auth(self.config.credential.expose())
             })
             .await?;
         Self::decode_response(response).await
@@ -271,7 +287,7 @@ impl CloudConvertClient {
             .send_api(|| {
                 self.http
                     .request(Method::GET, url.clone())
-                    .bearer_auth(self.config.api_key.expose())
+                    .bearer_auth(self.config.credential.expose())
                     .query(query)
             })
             .await?;
@@ -288,7 +304,7 @@ impl CloudConvertClient {
             .send_api(|| {
                 self.http
                     .request(Method::POST, url.clone())
-                    .bearer_auth(self.config.api_key.expose())
+                    .bearer_auth(self.config.credential.expose())
                     .json(body)
             })
             .await?;
@@ -301,7 +317,7 @@ impl CloudConvertClient {
             .send_api(|| {
                 self.http
                     .request(Method::DELETE, url.clone())
-                    .bearer_auth(self.config.api_key.expose())
+                    .bearer_auth(self.config.credential.expose())
             })
             .await?;
         Self::ensure_success(response).await?;
@@ -317,7 +333,7 @@ impl CloudConvertClient {
             .send_api(|| {
                 self.redirectless_http
                     .request(Method::GET, url.clone())
-                    .bearer_auth(self.config.api_key.expose())
+                    .bearer_auth(self.config.credential.expose())
                     .query(query)
             })
             .await?;
@@ -333,7 +349,7 @@ impl CloudConvertClient {
             .send_api(|| {
                 self.redirectless_http
                     .request(Method::POST, url.clone())
-                    .bearer_auth(self.config.api_key.expose())
+                    .bearer_auth(self.config.credential.expose())
                     .json(body)
             })
             .await?;
@@ -687,6 +703,23 @@ impl JobsResource {
         }
     }
 
+    #[cfg(feature = "socket")]
+    pub async fn task_events_socket(&self, id: impl AsRef<str>) -> Result<CloudConvertSocket> {
+        self.task_events_socket_with_buffer(id, 64).await
+    }
+
+    #[cfg(feature = "socket")]
+    pub async fn task_events_socket_with_buffer(
+        &self,
+        id: impl AsRef<str>,
+        buffer: usize,
+    ) -> Result<CloudConvertSocket> {
+        let id = resource_id(id.as_ref())?.to_string();
+        self.client
+            .socket_with_buffer([SocketChannel::job_tasks(id)], buffer)
+            .await
+    }
+
     pub async fn wait_response(&self, id: impl AsRef<str>) -> Result<ApiResponse<Job>> {
         let id = resource_id(id.as_ref())?;
         self.client
@@ -912,6 +945,54 @@ impl UsersResource {
     pub async fn me_response(&self) -> Result<ApiResponse<User>> {
         self.client
             .get_response(&self.client.config.api_base_url, "users/me")
+            .await
+    }
+
+    #[cfg(feature = "socket")]
+    pub async fn job_events_socket(&self) -> Result<CloudConvertSocket> {
+        self.job_events_socket_with_buffer(64).await
+    }
+
+    #[cfg(feature = "socket")]
+    pub async fn job_events_socket_with_buffer(&self, buffer: usize) -> Result<CloudConvertSocket> {
+        let user = self.me().await?;
+        self.client
+            .socket_with_buffer([SocketChannel::user_jobs(user.id)], buffer)
+            .await
+    }
+
+    #[cfg(feature = "socket")]
+    pub async fn task_events_socket(&self) -> Result<CloudConvertSocket> {
+        self.task_events_socket_with_buffer(64).await
+    }
+
+    #[cfg(feature = "socket")]
+    pub async fn task_events_socket_with_buffer(
+        &self,
+        buffer: usize,
+    ) -> Result<CloudConvertSocket> {
+        let user = self.me().await?;
+        self.client
+            .socket_with_buffer([SocketChannel::user_tasks(user.id)], buffer)
+            .await
+    }
+
+    #[cfg(feature = "socket")]
+    pub async fn events_socket(&self) -> Result<CloudConvertSocket> {
+        self.events_socket_with_buffer(64).await
+    }
+
+    #[cfg(feature = "socket")]
+    pub async fn events_socket_with_buffer(&self, buffer: usize) -> Result<CloudConvertSocket> {
+        let user = self.me().await?;
+        self.client
+            .socket_with_buffer(
+                [
+                    SocketChannel::user_jobs(user.id.clone()),
+                    SocketChannel::user_tasks(user.id),
+                ],
+                buffer,
+            )
             .await
     }
 }

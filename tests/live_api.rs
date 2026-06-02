@@ -113,6 +113,37 @@ async fn live_api_uploads_converts_exports_and_downloads() -> cloudconvert_sdk::
     Ok(())
 }
 
+#[cfg(feature = "socket")]
+#[tokio::test]
+#[ignore = "requires CLOUDCONVERT_API_KEY in .env or the environment and performs live API calls"]
+async fn live_api_waits_for_terminal_job_over_socket() -> cloudconvert_sdk::Result<()> {
+    if live_tests_are_disabled_in_ci() {
+        return Ok(());
+    }
+
+    let client = CloudConvertClient::builder(live_api_key()).build()?;
+    let tag = format!("rust-sdk-live-socket-{}", timestamp());
+    let request = JobCreateRequest::builder()
+        .tag(tag)
+        .task(
+            "import-file",
+            ImportUrlTask::new("http://invalid.url").filename("input.pdf"),
+        )
+        .task("export-file", TaskRequest::export_url("import-file"))
+        .build();
+
+    let job = client.jobs().create(request).await?;
+    let job_id = job.id.clone();
+    let result = client.jobs().wait_socket(&job_id).await;
+    let cleanup = client.jobs().delete(&job_id).await;
+
+    let finished = result?;
+    cleanup?;
+    assert!(finished.is_terminal());
+
+    Ok(())
+}
+
 async fn run_uploaded_conversion(
     client: &CloudConvertClient,
     job_id: &str,

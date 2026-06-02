@@ -36,6 +36,105 @@ impl fmt::Debug for ApiKey {
 }
 
 #[derive(Clone)]
+pub struct OAuthAccessToken(Arc<SecretString>);
+
+impl OAuthAccessToken {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(Arc::new(SecretString::from(value.into())))
+    }
+
+    pub(crate) fn expose(&self) -> &str {
+        self.0.expose_secret()
+    }
+
+    pub fn from_env() -> Result<Self> {
+        env::var("CLOUDCONVERT_OAUTH_ACCESS_TOKEN")
+            .map(Self::new)
+            .map_err(|_| Error::MissingEnv("CLOUDCONVERT_OAUTH_ACCESS_TOKEN"))
+    }
+}
+
+impl fmt::Debug for OAuthAccessToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("OAuthAccessToken(REDACTED)")
+    }
+}
+
+#[derive(Clone)]
+pub struct OAuthRefreshToken(Arc<SecretString>);
+
+impl OAuthRefreshToken {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(Arc::new(SecretString::from(value.into())))
+    }
+
+    pub(crate) fn expose(&self) -> &str {
+        self.0.expose_secret()
+    }
+
+    pub fn from_env() -> Result<Self> {
+        env::var("CLOUDCONVERT_OAUTH_REFRESH_TOKEN")
+            .map(Self::new)
+            .map_err(|_| Error::MissingEnv("CLOUDCONVERT_OAUTH_REFRESH_TOKEN"))
+    }
+}
+
+impl fmt::Debug for OAuthRefreshToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("OAuthRefreshToken(REDACTED)")
+    }
+}
+
+#[derive(Clone)]
+pub struct OAuthClientSecret(Arc<SecretString>);
+
+impl OAuthClientSecret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(Arc::new(SecretString::from(value.into())))
+    }
+
+    pub(crate) fn expose(&self) -> &str {
+        self.0.expose_secret()
+    }
+
+    pub fn from_env() -> Result<Self> {
+        env::var("CLOUDCONVERT_OAUTH_CLIENT_SECRET")
+            .map(Self::new)
+            .map_err(|_| Error::MissingEnv("CLOUDCONVERT_OAUTH_CLIENT_SECRET"))
+    }
+}
+
+impl fmt::Debug for OAuthClientSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("OAuthClientSecret(REDACTED)")
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum BearerCredential {
+    ApiKey(ApiKey),
+    OAuthAccessToken(OAuthAccessToken),
+}
+
+impl BearerCredential {
+    pub(crate) fn expose(&self) -> &str {
+        match self {
+            Self::ApiKey(api_key) => api_key.expose(),
+            Self::OAuthAccessToken(access_token) => access_token.expose(),
+        }
+    }
+}
+
+impl fmt::Debug for BearerCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ApiKey(api_key) => api_key.fmt(f),
+            Self::OAuthAccessToken(access_token) => access_token.fmt(f),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct SigningSecret(Arc<SecretString>);
 
 impl SigningSecret {
@@ -74,7 +173,7 @@ impl Region {
 
 #[derive(Clone)]
 pub struct CloudConvertConfig {
-    pub(crate) api_key: ApiKey,
+    pub(crate) credential: BearerCredential,
     pub(crate) api_base_url: Url,
     pub(crate) sync_base_url: Url,
     pub(crate) sandbox: bool,
@@ -105,7 +204,7 @@ impl fmt::Debug for CloudConvertConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug = f.debug_struct("CloudConvertConfig");
         debug
-            .field("api_key", &self.api_key)
+            .field("credential", &self.credential)
             .field("api_base_url", &self.api_base_url)
             .field("sync_base_url", &self.sync_base_url)
             .field("sandbox", &self.sandbox)
@@ -244,7 +343,7 @@ impl Default for RetryPolicy {
 
 #[derive(Clone, Debug)]
 pub struct ClientBuilder {
-    api_key: ApiKey,
+    credential: BearerCredential,
     sandbox: bool,
     region: Option<Region>,
     api_base_url: Option<Url>,
@@ -258,8 +357,16 @@ pub struct ClientBuilder {
 
 impl ClientBuilder {
     pub fn new(api_key: ApiKey) -> Self {
+        Self::with_credential(BearerCredential::ApiKey(api_key))
+    }
+
+    pub fn new_with_access_token(access_token: OAuthAccessToken) -> Self {
+        Self::with_credential(BearerCredential::OAuthAccessToken(access_token))
+    }
+
+    pub(crate) fn with_credential(credential: BearerCredential) -> Self {
         Self {
-            api_key,
+            credential,
             sandbox: false,
             region: None,
             api_base_url: None,
@@ -325,7 +432,7 @@ impl ClientBuilder {
         };
 
         let config = CloudConvertConfig {
-            api_key: self.api_key,
+            credential: self.credential,
             api_base_url,
             sync_base_url,
             sandbox: self.sandbox,

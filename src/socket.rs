@@ -33,6 +33,10 @@ pub enum SocketChannel {
 }
 
 impl SocketChannel {
+    pub fn custom(channel: impl Into<String>) -> Self {
+        Self::Custom(channel.into())
+    }
+
     pub fn job(job_id: impl Into<String>) -> Self {
         Self::Job {
             job_id: job_id.into(),
@@ -73,6 +77,47 @@ impl SocketChannel {
             Self::Custom(channel) => Cow::Borrowed(channel.as_str()),
         }
     }
+
+    pub fn is_job(&self) -> bool {
+        matches!(self, Self::Job { .. })
+    }
+
+    pub fn is_job_tasks(&self) -> bool {
+        matches!(self, Self::JobTasks { .. })
+    }
+
+    pub fn is_task(&self) -> bool {
+        matches!(self, Self::Task { .. })
+    }
+
+    pub fn is_user_jobs(&self) -> bool {
+        matches!(self, Self::UserJobs { .. })
+    }
+
+    pub fn is_user_tasks(&self) -> bool {
+        matches!(self, Self::UserTasks { .. })
+    }
+
+    pub fn job_id(&self) -> Option<&str> {
+        match self {
+            Self::Job { job_id } | Self::JobTasks { job_id } => Some(job_id),
+            _ => None,
+        }
+    }
+
+    pub fn task_id(&self) -> Option<&str> {
+        match self {
+            Self::Task { task_id } => Some(task_id),
+            _ => None,
+        }
+    }
+
+    pub fn user_id(&self) -> Option<&str> {
+        match self {
+            Self::UserJobs { user_id } | Self::UserTasks { user_id } => Some(user_id),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,6 +138,16 @@ impl JobSocketEvent {
             Self::Failed => "job.failed",
         }
     }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "job.created" => Self::Created,
+            "job.updated" => Self::Updated,
+            "job.finished" => Self::Finished,
+            "job.failed" => Self::Failed,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,6 +167,53 @@ impl TaskSocketEvent {
             Self::Finished => "task.finished",
             Self::Failed => "task.failed",
         }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "task.created" => Self::Created,
+            "task.updated" => Self::Updated,
+            "task.finished" => Self::Finished,
+            "task.failed" => Self::Failed,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SocketEventKind {
+    Job(JobSocketEvent),
+    Task(TaskSocketEvent),
+    Other(String),
+}
+
+impl SocketEventKind {
+    pub fn from_name(name: impl Into<String>) -> Self {
+        let name = name.into();
+        if let Some(event) = JobSocketEvent::from_name(&name) {
+            return Self::Job(event);
+        }
+        if let Some(event) = TaskSocketEvent::from_name(&name) {
+            return Self::Task(event);
+        }
+        Self::Other(name)
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Job(event) => event.name(),
+            Self::Task(event) => event.name(),
+            Self::Other(event) => event.as_str(),
+        }
+    }
+
+    pub fn is_job(&self) -> bool {
+        matches!(self, Self::Job(_))
+    }
+
+    pub fn is_task(&self) -> bool {
+        matches!(self, Self::Task(_))
     }
 }
 
@@ -192,6 +294,18 @@ impl SocketEvent {
         &self.data
     }
 
+    pub fn kind(&self) -> SocketEventKind {
+        SocketEventKind::from_name(self.event.clone())
+    }
+
+    pub fn job_event(&self) -> Option<JobSocketEvent> {
+        JobSocketEvent::from_name(&self.event)
+    }
+
+    pub fn task_event(&self) -> Option<TaskSocketEvent> {
+        TaskSocketEvent::from_name(&self.event)
+    }
+
     pub fn is_job_event(&self) -> bool {
         self.event.starts_with("job.")
     }
@@ -202,6 +316,14 @@ impl SocketEvent {
 
     pub fn is_finished(&self) -> bool {
         self.event.ends_with(".finished")
+    }
+
+    pub fn is_created(&self) -> bool {
+        self.event.ends_with(".created")
+    }
+
+    pub fn is_updated(&self) -> bool {
+        self.event.ends_with(".updated")
     }
 
     pub fn is_failed(&self) -> bool {
@@ -399,7 +521,10 @@ mod managed_socket_tests {
 
         assert_eq!(event.event(), "job.finished");
         assert_eq!(event.channel(), Some("private-job.job_1"));
+        assert_eq!(event.kind(), SocketEventKind::Job(JobSocketEvent::Finished));
+        assert_eq!(event.job_event(), Some(JobSocketEvent::Finished));
         assert!(event.is_job_event());
+        assert!(event.is_finished());
         assert!(event.is_terminal());
         assert_eq!(event.job().unwrap().unwrap().id, "job_1");
     }
@@ -413,6 +538,8 @@ mod managed_socket_tests {
 
         assert_eq!(event.channel(), None);
         assert_eq!(event.data()["unexpected"], true);
+        assert_eq!(event.task_event(), Some(TaskSocketEvent::Updated));
+        assert!(event.is_updated());
         assert!(event.task().unwrap().is_none());
     }
 }

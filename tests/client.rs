@@ -16,8 +16,10 @@ use axum::{
 #[cfg(feature = "retry")]
 use cloudconvert_sdk::RetryPolicy;
 use cloudconvert_sdk::{
-    ApiKey, CloudConvertClient, Error, ImportUrlTask, JobCreateRequest, JobListQuery,
-    OperationListQuery, Task, TaskRequest, TransportConfig, WatermarkTask,
+    ApiKey, CloudConvertClient, ConvertTask, Error, ImportUrlTask, JobCreateRequest, JobListQuery,
+    OAuthAccessToken, OAuthClient, OAuthClientSecret, OAuthScope, OperationListQuery,
+    OperationOptionKind, OperationValidationErrorKind, Task, TaskRequest, TransportConfig,
+    WatermarkTask,
 };
 use futures_util::stream;
 use serde_json::{Value, json};
@@ -40,6 +42,7 @@ struct Observed {
     download_auth_headers: Arc<Mutex<Vec<Option<String>>>>,
     upload_auth_headers: Arc<Mutex<Vec<Option<String>>>>,
     upload_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
+    oauth_token_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
     flaky_job_attempts: Arc<Mutex<u32>>,
 }
 
@@ -76,6 +79,8 @@ impl MockApi {
             .route("/v2/webhooks", post(create_webhook))
             .route("/v2/webhooks/webhook_1", delete(delete_webhook))
             .route("/v2/import/url", post(create_task))
+            .route("/oauth/token", post(oauth_token))
+            .route("/oauth/token-error", post(oauth_token_error))
             .route("/download", get(download))
             .route("/download-fail", get(download_failure))
             .route("/upload", post(upload))
@@ -184,14 +189,199 @@ async fn operation_discovery_returns_typed_metadata() {
     assert_eq!(operations[0].operation, "convert");
     assert_eq!(operations[0].input_format.as_deref(), Some("pdf"));
     assert_eq!(operations[0].output_format.as_deref(), Some("png"));
-    assert_eq!(operations[0].engine_versions, vec!["1.0".to_string()]);
-    assert!(
-        operations[0]
-            .options
-            .as_ref()
-            .unwrap()
-            .contains_key("width")
+    assert_eq!(
+        operations[0].engine_version_values().collect::<Vec<_>>(),
+        vec!["1.0", "1.1"]
     );
+    assert_eq!(
+        operations[0].default_engine_version().unwrap().version,
+        "1.0"
+    );
+    assert_eq!(
+        operations[0].latest_engine_version().unwrap().version,
+        "1.1"
+    );
+
+    let width = operations[0].option("width").unwrap();
+    assert_eq!(width.kind(), Some(&OperationOptionKind::Integer));
+    assert!(width.is_required());
+    assert_eq!(width.default.as_ref(), Some(&json!(800)));
+    assert_eq!(width.extra["ui_group"], "size");
+    let fit = operations[0].option("fit").unwrap();
+    assert_eq!(fit.kind(), Some(&OperationOptionKind::Enum));
+    assert_eq!(fit.possible_values(), &[json!("max"), json!("crop")]);
+    assert_eq!(
+        operations[0].alternatives[0].engine.as_deref(),
+        Some("imagemagick")
+    );
+}
+
+#[tokio::test]
+async fn operation_metadata_validates_task_requests_when_requested() {
+    let api = MockApi::spawn().await;
+    let client = mock_client(&api);
+    let operation = client
+        .operations()
+        .list(&OperationListQuery::default().include_options())
+        .await
+        .unwrap()
+        .remove(0);
+
+    let valid = TaskRequest::from(
+        ConvertTask::new("import-file", "png")
+            .option("width", 800)
+            .option("fit", "max"),
+    );
+    operation.validate_task(&valid).unwrap();
+    operation.validate_task_strict(&valid).unwrap();
+
+    let missing_required = TaskRequest::from(ConvertTask::new("import-file", "png"));
+    let error = operation.validate_task(&missing_required).unwrap_err();
+    assert_eq!(
+        error.kind,
+        OperationValidationErrorKind::MissingRequiredOption
+    );
+    assert_eq!(error.option.as_deref(), Some("width"));
+
+    let wrong_type =
+        TaskRequest::from(ConvertTask::new("import-file", "png").option("width", "800"));
+    let error = operation.validate_task(&wrong_type).unwrap_err();
+    assert_eq!(error.kind, OperationValidationErrorKind::InvalidOptionType);
+
+    let disallowed = TaskRequest::from(
+        ConvertTask::new("import-file", "png")
+            .option("width", 800)
+            .option("fit", "stretch"),
+    );
+    let error = operation.validate_task(&disallowed).unwrap_err();
+    assert_eq!(error.kind, OperationValidationErrorKind::InvalidOptionValue);
+
+    let unknown = TaskRequest::from(
+        ConvertTask::new("import-file", "png")
+            .option("width", 800)
+            .option("new_cloudconvert_option", true),
+    );
+    operation.validate_task(&unknown).unwrap();
+    let error = operation.validate_task_strict(&unknown).unwrap_err();
+    assert_eq!(error.kind, OperationValidationErrorKind::UnknownOption);
+}
+
+#[tokio::test]
+async fn oauth_client_builds_urls_exchanges_tokens_and_authorizes_api_calls() {
+    let api = MockApi::spawn().await;
+    let authorize_url = api.base_url.join("../oauth/authorize").unwrap();
+    let token_url = api.base_url.join("../oauth/token").unwrap();
+    let oauth = OAuthClient::new("client_1", OAuthClientSecret::new("client_secret_1"))
+        .unwrap()
+        .with_endpoints(authorize_url, token_url);
+
+    let authorize = oauth
+        .authorization_code_url_with_state(
+            "https://app.example.test/callback",
+            [OAuthScope::TaskRead, OAuthScope::TaskWrite],
+            "state_1",
+        )
+        .unwrap();
+    assert_eq!(authorize.path(), "/oauth/authorize");
+    assert!(authorize.as_str().contains("response_type=code"));
+    assert!(authorize.as_str().contains("client_id=client_1"));
+    assert!(authorize.as_str().contains("scope=task.read+task.write"));
+    assert!(authorize.as_str().contains("state=state_1"));
+
+    let implicit = oauth
+        .implicit_url("https://app.example.test/callback", [OAuthScope::UserRead])
+        .unwrap();
+    assert!(implicit.as_str().contains("response_type=token"));
+
+    let token = oauth
+        .exchange_code("authorization_code_1", "https://app.example.test/callback")
+        .await
+        .unwrap();
+    assert_eq!(token.token_type.as_deref(), Some("Bearer"));
+    assert_eq!(token.expires_in, Some(3600));
+    assert!(format!("{token:?}").contains("REDACTED"));
+    assert!(!format!("{token:?}").contains("oauth_access_token_1"));
+
+    let refreshed = oauth
+        .refresh_access_token(token.refresh_token().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(refreshed.scope.as_deref(), Some("task.read task.write"));
+
+    let client = token
+        .client_builder()
+        .with_base_urls(api.base_url.clone(), api.base_url.clone())
+        .build()
+        .unwrap();
+    let user = client.users().me().await.unwrap();
+    assert_eq!(user.id, "user_1");
+
+    let auth_headers = api.observed.api_auth_headers.lock().await;
+    assert_eq!(
+        auth_headers.last().and_then(|value| value.as_deref()),
+        Some("Bearer oauth_access_token_1")
+    );
+
+    let token_bodies = api.observed.oauth_token_bodies.lock().await;
+    let joined = token_bodies
+        .iter()
+        .map(|body| String::from_utf8_lossy(body).into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(joined.contains("grant_type=authorization_code"));
+    assert!(joined.contains("grant_type=refresh_token"));
+    assert!(joined.contains("client_secret=client_secret_1"));
+}
+
+#[tokio::test]
+async fn oauth_token_errors_decode_as_api_errors() {
+    let api = MockApi::spawn().await;
+    let oauth = OAuthClient::new("client_1", OAuthClientSecret::new("client_secret_1"))
+        .unwrap()
+        .with_endpoints(
+            api.base_url.join("../oauth/authorize").unwrap(),
+            api.base_url.join("../oauth/token-error").unwrap(),
+        );
+
+    let error = oauth
+        .exchange_code("expired_code", "https://app.example.test/callback")
+        .await
+        .unwrap_err();
+    let api_error = error.api_error().unwrap();
+    assert_eq!(api_error.status, 400);
+    assert_eq!(api_error.message, "authorization code expired");
+    assert_eq!(api_error.code, Some("invalid_grant"));
+}
+
+#[tokio::test]
+async fn oauth_access_token_builder_authorizes_api_but_not_storage_urls() {
+    let api = MockApi::spawn().await;
+    let client =
+        CloudConvertClient::builder_with_access_token(OAuthAccessToken::new("oauth_direct_token"))
+            .with_base_urls(api.base_url.clone(), api.base_url.clone())
+            .build()
+            .unwrap();
+
+    let _ = client.jobs().get_redirect_url("job_1").await.unwrap();
+    let _ = client
+        .download(api.base_url.join("../download").unwrap())
+        .await
+        .unwrap();
+    let task = upload_task(api.base_url.join("../upload").unwrap().to_string());
+    client
+        .upload_bytes(&task, "input.txt", bytes::Bytes::from_static(b"test"))
+        .await
+        .unwrap();
+
+    let api_auth_headers = api.observed.api_auth_headers.lock().await;
+    assert_eq!(
+        api_auth_headers.last().and_then(|value| value.as_deref()),
+        Some("Bearer oauth_direct_token")
+    );
+    let download_auth_headers = api.observed.download_auth_headers.lock().await;
+    assert_eq!(download_auth_headers[0], None);
+    let upload_auth_headers = api.observed.upload_auth_headers.lock().await;
+    assert_eq!(upload_auth_headers[0], None);
 }
 
 #[tokio::test]
@@ -1048,14 +1238,49 @@ async fn list_operations(
                 "output_format": "png",
                 "engine": "poppler",
                 "engine_version": "1.0",
-                "engine_versions": ["1.0"],
-                "options": {
-                    "width": {
+                "engine_versions": [
+                    {
+                        "version": "1.0",
+                        "default": true,
+                        "latest": false
+                    },
+                    {
+                        "version": "1.1",
+                        "default": false,
+                        "latest": true,
+                        "experimental": true
+                    }
+                ],
+                "options": [
+                    {
+                        "name": "width",
                         "type": "integer",
                         "label": "Width",
+                        "required": true,
+                        "default": 800,
+                        "ui_group": "size"
+                    },
+                    {
+                        "name": "fit",
+                        "type": "enum",
+                        "label": "Fit",
                         "required": false,
-                        "default": 800
+                        "default": "max",
+                        "possible_values": ["max", "crop"]
                     }
+                ],
+                "alternatives": [
+                    {
+                        "operation": "convert",
+                        "input_format": "pdf",
+                        "output_format": "png",
+                        "engine": "imagemagick"
+                    }
+                ],
+                "deprecated": false,
+                "experimental": false,
+                "meta": {
+                    "category": "image"
                 }
             }
         ],
@@ -1179,6 +1404,28 @@ async fn delete_webhook(
 ) -> impl IntoResponse {
     record_api_request(&observed, Method::DELETE, uri, &headers).await;
     StatusCode::NO_CONTENT
+}
+
+async fn oauth_token(State(observed): State<Observed>, body: Bytes) -> impl IntoResponse {
+    observed.oauth_token_bodies.lock().await.push(body.to_vec());
+    Json(json!({
+        "access_token": "oauth_access_token_1",
+        "refresh_token": "oauth_refresh_token_1",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "scope": "task.read task.write"
+    }))
+}
+
+async fn oauth_token_error(body: Bytes) -> impl IntoResponse {
+    let _ = body;
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": "invalid_grant",
+            "error_description": "authorization code expired"
+        })),
+    )
 }
 
 async fn delete_job(State(observed): State<Observed>, headers: HeaderMap) -> impl IntoResponse {
