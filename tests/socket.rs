@@ -9,6 +9,8 @@ fn socket_channels_and_events_match_cloudconvert_names() {
     assert_eq!(SocketChannel::job("job_1").name(), "private-job.job_1");
     assert!(SocketChannel::job("job_1").is_job());
     assert_eq!(SocketChannel::job("job_1").job_id(), Some("job_1"));
+    assert!(!SocketChannel::job("job_1").is_task());
+    assert_eq!(SocketChannel::job("job_1").task_id(), None);
     assert_eq!(
         SocketChannel::job_tasks("job_1").name(),
         "private-job.job_1.tasks"
@@ -16,6 +18,7 @@ fn socket_channels_and_events_match_cloudconvert_names() {
     assert!(SocketChannel::job_tasks("job_1").is_job_tasks());
     assert_eq!(SocketChannel::task("task_1").name(), "private-task.task_1");
     assert_eq!(SocketChannel::task("task_1").task_id(), Some("task_1"));
+    assert_eq!(SocketChannel::task("task_1").job_id(), None);
     assert_eq!(
         SocketChannel::user_jobs("user_1").name(),
         "private-user.user_1.jobs"
@@ -43,10 +46,12 @@ fn socket_channels_and_events_match_cloudconvert_names() {
         SocketEventKind::from_name("job.finished"),
         SocketEventKind::Job(JobSocketEvent::Finished)
     );
+    assert!(SocketEventKind::from_name("job.finished").is_job());
     assert_eq!(
         SocketEventKind::from_name("task.failed"),
         SocketEventKind::Task(TaskSocketEvent::Failed)
     );
+    assert!(SocketEventKind::from_name("task.failed").is_task());
     assert_eq!(
         SocketEventKind::from_name("custom.event").name(),
         "custom.event"

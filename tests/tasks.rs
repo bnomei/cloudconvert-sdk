@@ -4,11 +4,12 @@ use cloudconvert_sdk::{
     ArchiveTask, AzureBlobExportTask, AzureBlobImportTask, Base64ImportTask, CaptureWebsiteTask,
     CommandTask, ConvertTask, ExportUploadTask, ExportUrlTask, FileExtension,
     GoogleCloudStorageExportTask, GoogleCloudStorageImportTask, ImportUploadTask, ImportUrlTask,
-    Input, JobCreateRequest, JobGraphBuilder, JobListQuery, JobStatus, Layer, MergeTask,
-    MetadataTask, MetadataWriteTask, OpenStackExportTask, OpenStackImportTask, OperationListQuery,
-    OptimizeTask, PdfATask, PositionHorizontal, PositionVertical, RawImportTask, S3ExportTask,
-    S3ImportTask, SftpExportTask, SftpImportTask, TaskListQuery, TaskRequest, TaskStatus,
-    ThumbnailTask, WatermarkTask, WebhookCreateRequest, WebhookEvent, WebhookListQuery,
+    Input, JobCreateRequest, JobGetQuery, JobGraphBuilder, JobListQuery, JobStatus, Layer,
+    MergeTask, MetadataTask, MetadataWriteTask, OpenStackExportTask, OpenStackImportTask,
+    OperationListQuery, OptimizeTask, PdfATask, PositionHorizontal, PositionVertical,
+    RawImportTask, S3ExportTask, S3ImportTask, SftpExportTask, SftpImportTask, TaskGetQuery,
+    TaskListQuery, TaskName, TaskRequest, TaskStatus, ThumbnailTask, WatermarkTask,
+    WebhookCreateRequest, WebhookEvent, WebhookListQuery,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -245,6 +246,469 @@ fn task_name_arrays_serialize_as_multi_input() {
 }
 
 #[test]
+fn task_name_conversions_cover_owned_and_borrowed_inputs() {
+    let mut builder = JobCreateRequest::builder();
+    let first: TaskName =
+        builder.add_task(TaskRequest::import_url("https://example.test/first.pdf"));
+    let second: TaskName =
+        builder.add_task(TaskRequest::import_url("https://example.test/second.pdf"));
+
+    assert_eq!(first.as_ref(), "import-url");
+    assert_eq!(String::from(first.clone()), "import-url");
+    assert_eq!(String::from(&second), "import-url-2");
+    assert_eq!(
+        Input::from(first.clone()),
+        Input::Task("import-url".to_string())
+    );
+    assert_eq!(
+        Input::from(&second),
+        Input::Task("import-url-2".to_string())
+    );
+    assert_eq!(
+        Input::from(vec![first.clone(), second.clone()]),
+        Input::Tasks(vec!["import-url".to_string(), "import-url-2".to_string()])
+    );
+    assert_eq!(
+        Input::from(vec![&first, &second]),
+        Input::Tasks(vec!["import-url".to_string(), "import-url-2".to_string()])
+    );
+    assert_eq!(
+        Input::from([first.clone(), second.clone()]),
+        Input::Tasks(vec!["import-url".to_string(), "import-url-2".to_string()])
+    );
+    assert_eq!(
+        Input::from([&first, &second]),
+        Input::Tasks(vec!["import-url".to_string(), "import-url-2".to_string()])
+    );
+}
+
+#[test]
+fn job_builder_covers_linear_shortcut_surface() {
+    let job = JobCreateRequest::linear()
+        .tag("all-linear-shortcuts")
+        .webhook_url("https://example.test/hook")
+        .redirect(false)
+        .option("job_mode", "coverage")
+        .import_url("https://example.test/input.docx")
+        .import_upload()
+        .import_base64("UERG", "input.pdf")
+        .import_raw("%PDF-1.7", "raw.pdf")
+        .import_s3("source-bucket", "eu-central-1", "access-id", "secret-key")
+        .import_azure_blob("storage-account", "documents")
+        .import_google_cloud_storage(
+            "project-id",
+            "source-bucket",
+            "client@example.test",
+            "private-key",
+        )
+        .import_openstack(
+            "https://openstack.example.test/auth",
+            "username",
+            "password",
+            "region-one",
+            "documents",
+        )
+        .import_sftp("sftp.example.test", "username")
+        .convert(FileExtension::Pdf)
+        .convert_with_input_format(FileExtension::Pdf, FileExtension::Png)
+        .optimize()
+        .watermark_text("Draft")
+        .watermark_image("logo-file")
+        .capture_website("https://example.test", FileExtension::Pdf)
+        .thumbnail(FileExtension::Jpg)
+        .metadata()
+        .metadata_write()
+        .merge(FileExtension::Pdf)
+        .archive(FileExtension::Zip)
+        .command("imagemagick", "convert", "$input $output")
+        .pdf_a()
+        .pdf_x()
+        .pdf_ocr()
+        .pdf_encrypt()
+        .pdf_decrypt()
+        .pdf_split_pages()
+        .pdf_extract_pages()
+        .pdf_rotate_pages()
+        .export_url()
+        .export_s3("target-bucket", "eu-central-1", "access-id", "secret-key")
+        .export_azure_blob("storage-account", "documents")
+        .export_google_cloud_storage(
+            "project-id",
+            "target-bucket",
+            "client@example.test",
+            "private-key",
+        )
+        .export_openstack(
+            "https://openstack.example.test/auth",
+            "username",
+            "password",
+            "region-one",
+            "documents",
+        )
+        .export_sftp("sftp.example.test", "username")
+        .export_upload("https://upload.example.test/report.pdf")
+        .build();
+
+    let payload = serde_json::to_value(job).unwrap();
+    let tasks = payload["tasks"].as_object().unwrap();
+
+    assert_eq!(payload["tag"], "all-linear-shortcuts");
+    assert_eq!(payload["webhook_url"], "https://example.test/hook");
+    assert_eq!(payload["redirect"], false);
+    assert_eq!(payload["job_mode"], "coverage");
+    assert_eq!(tasks.len(), 36);
+    assert_eq!(tasks["import-url"]["operation"], "import/url");
+    assert_eq!(tasks["import-upload"]["operation"], "import/upload");
+    assert_eq!(tasks["import-base64"]["operation"], "import/base64");
+    assert_eq!(tasks["import-raw"]["operation"], "import/raw");
+    assert_eq!(tasks["import-s3"]["operation"], "import/s3");
+    assert_eq!(tasks["import-azure-blob"]["operation"], "import/azure/blob");
+    assert_eq!(
+        tasks["import-google-cloud-storage"]["operation"],
+        "import/google-cloud-storage"
+    );
+    assert_eq!(tasks["import-openstack"]["operation"], "import/openstack");
+    assert_eq!(tasks["import-sftp"]["operation"], "import/sftp");
+    assert_eq!(tasks["convert"]["input"], "import-sftp");
+    assert_eq!(tasks["convert-2"]["input_format"], "pdf");
+    assert_eq!(tasks["optimize"]["input"], "convert-2");
+    assert_eq!(tasks["watermark"]["input"], "optimize");
+    assert_eq!(tasks["watermark-2"]["image"], "logo-file");
+    assert_eq!(tasks["capture-website"]["operation"], "capture-website");
+    assert_eq!(tasks["thumbnail"]["input"], "capture-website");
+    assert_eq!(tasks["metadata"]["input"], "thumbnail");
+    assert_eq!(tasks["metadata-write"]["input"], "metadata");
+    assert_eq!(tasks["merge"]["input"], "metadata-write");
+    assert_eq!(tasks["archive"]["input"], "merge");
+    assert_eq!(tasks["command"]["input"], "archive");
+    assert_eq!(tasks["pdf-a"]["input"], "command");
+    assert_eq!(tasks["pdf-rotate-pages"]["input"], "pdf-extract-pages");
+    assert_eq!(tasks["export-url"]["input"], "pdf-rotate-pages");
+    assert_eq!(tasks["export-s3"]["input"], "export-url");
+    assert_eq!(tasks["export-azure-blob"]["input"], "export-s3");
+    assert_eq!(
+        tasks["export-google-cloud-storage"]["input"],
+        "export-azure-blob"
+    );
+    assert_eq!(
+        tasks["export-openstack"]["input"],
+        "export-google-cloud-storage"
+    );
+    assert_eq!(tasks["export-sftp"]["input"], "export-openstack");
+    assert_eq!(tasks["export-upload"]["input"], "export-sftp");
+}
+
+#[test]
+fn job_builder_covers_configured_linear_shortcut_surface() {
+    let job = JobCreateRequest::linear()
+        .import_url_with("https://example.test/input.docx", |task| {
+            task.filename("input.docx")
+        })
+        .import_upload_with(|task| task.redirect("https://example.test/upload-complete"))
+        .import_s3_with(
+            "source-bucket",
+            "eu-central-1",
+            "access-id",
+            "secret-key",
+            |task| task.key("incoming/report.pdf"),
+        )
+        .import_azure_blob_with("storage-account", "documents", |task| {
+            task.blob("incoming/report.pdf")
+        })
+        .import_google_cloud_storage(
+            "project-id",
+            "source-bucket",
+            "client@example.test",
+            "private-key",
+        )
+        .import_google_cloud_storage_with(
+            "project-id",
+            "source-bucket",
+            "client@example.test",
+            "private-key",
+            |task| task.file("incoming/report.pdf"),
+        )
+        .import_openstack_with(
+            "https://openstack.example.test/auth",
+            "username",
+            "password",
+            "region-one",
+            "documents",
+            |task| task.file("incoming/report.pdf"),
+        )
+        .import_sftp_with("sftp.example.test", "username", |task| {
+            task.path("/incoming")
+        })
+        .convert_with(FileExtension::Pdf, |task| {
+            task.input_format(FileExtension::Docx)
+                .filename("converted.pdf")
+        })
+        .optimize_with(|task| task.profile("print").quality(90))
+        .watermark_text_with("Draft", |task| task.opacity(40))
+        .watermark_image_with("logo-file", |task| task.image_width(200))
+        .capture_website_with("https://example.test", FileExtension::Pdf, |task| {
+            task.filename("capture.pdf")
+        })
+        .thumbnail_with(FileExtension::Jpg, |task| task.dimensions(320, 180))
+        .metadata_with(|task| task.option("include_raw", true))
+        .metadata_write_with(|task| task.metadata("Author", "CloudConvert"))
+        .merge_with(FileExtension::Pdf, |task| task.filename("merged.pdf"))
+        .archive_with(FileExtension::Zip, |task| task.filename("archive.zip"))
+        .command_with("imagemagick", "convert", "$input $output", |task| {
+            task.capture_output(true)
+        })
+        .pdf_a_with(|task| task.option("level", "3b"))
+        .pdf_x_with(|task| task.option("standard", "PDF/X-4"))
+        .pdf_ocr_with(|task| task.option("language", "eng"))
+        .pdf_encrypt_with(|task| task.option("user_password", "secret"))
+        .pdf_decrypt_with(|task| task.option("password", "secret"))
+        .pdf_split_pages_with(|task| task.option("pages", "1-3"))
+        .pdf_extract_pages_with(|task| task.option("pages", "1"))
+        .pdf_rotate_pages_with(|task| task.option("angle", 90))
+        .export_url_with(|task| task.inline(false))
+        .export_s3_with(
+            "target-bucket",
+            "eu-central-1",
+            "access-id",
+            "secret-key",
+            |task| task.key("exports/report.pdf"),
+        )
+        .export_azure_blob_with("storage-account", "documents", |task| {
+            task.blob("exports/report.pdf")
+        })
+        .export_google_cloud_storage_with(
+            "project-id",
+            "target-bucket",
+            "client@example.test",
+            "private-key",
+            |task| task.file("exports/report.pdf"),
+        )
+        .export_openstack_with(
+            "https://openstack.example.test/auth",
+            "username",
+            "password",
+            "region-one",
+            "documents",
+            |task| task.file("exports/report.pdf"),
+        )
+        .export_sftp_with("sftp.example.test", "username", |task| {
+            task.path("/exports")
+        })
+        .export_upload_with("https://upload.example.test/report.pdf", |task| {
+            task.header("Authorization", "Bearer token")
+        })
+        .build();
+
+    let payload = serde_json::to_value(job).unwrap();
+    let tasks = payload["tasks"].as_object().unwrap();
+
+    assert_eq!(tasks["import-url"]["filename"], "input.docx");
+    assert_eq!(
+        tasks["import-upload"]["redirect"],
+        "https://example.test/upload-complete"
+    );
+    assert_eq!(tasks["import-s3"]["key"], "incoming/report.pdf");
+    assert_eq!(tasks["import-azure-blob"]["blob"], "incoming/report.pdf");
+    assert_eq!(
+        tasks["import-google-cloud-storage-2"]["file"],
+        "incoming/report.pdf"
+    );
+    assert_eq!(tasks["import-openstack"]["file"], "incoming/report.pdf");
+    assert_eq!(tasks["import-sftp"]["path"], "/incoming");
+    assert_eq!(tasks["convert"]["input"], "import-sftp");
+    assert_eq!(tasks["convert"]["filename"], "converted.pdf");
+    assert_eq!(tasks["optimize"]["quality"], 90);
+    assert_eq!(tasks["watermark"]["opacity"], 40);
+    assert_eq!(tasks["watermark-2"]["image_width"], 200);
+    assert_eq!(tasks["capture-website"]["filename"], "capture.pdf");
+    assert_eq!(tasks["thumbnail"]["width"], 320);
+    assert_eq!(tasks["metadata"]["include_raw"], true);
+    assert_eq!(
+        tasks["metadata-write"]["metadata"]["Author"],
+        "CloudConvert"
+    );
+    assert_eq!(tasks["merge"]["filename"], "merged.pdf");
+    assert_eq!(tasks["archive"]["filename"], "archive.zip");
+    assert_eq!(tasks["command"]["capture_output"], true);
+    assert_eq!(tasks["pdf-a"]["level"], "3b");
+    assert_eq!(tasks["pdf-x"]["standard"], "PDF/X-4");
+    assert_eq!(tasks["pdf-ocr"]["language"], "eng");
+    assert_eq!(tasks["pdf-encrypt"]["user_password"], "secret");
+    assert_eq!(tasks["pdf-decrypt"]["password"], "secret");
+    assert_eq!(tasks["pdf-split-pages"]["pages"], "1-3");
+    assert_eq!(tasks["pdf-extract-pages"]["pages"], "1");
+    assert_eq!(tasks["pdf-rotate-pages"]["angle"], 90);
+    assert_eq!(tasks["export-url"]["inline"], false);
+    assert_eq!(tasks["export-s3"]["key"], "exports/report.pdf");
+    assert_eq!(tasks["export-azure-blob"]["blob"], "exports/report.pdf");
+    assert_eq!(
+        tasks["export-google-cloud-storage"]["file"],
+        "exports/report.pdf"
+    );
+    assert_eq!(tasks["export-openstack"]["file"], "exports/report.pdf");
+    assert_eq!(tasks["export-sftp"]["path"], "/exports");
+    assert_eq!(
+        tasks["export-upload"]["headers"]["Authorization"],
+        "Bearer token"
+    );
+}
+
+#[test]
+fn job_graph_builder_covers_shortcut_surface() {
+    let mut graph = JobGraphBuilder::new();
+    graph
+        .tag("graph-shortcuts")
+        .webhook_url("https://example.test/hook")
+        .redirect(true)
+        .option("graph_mode", "coverage");
+
+    let explicit = graph.add_named_task("explicit-source", TaskRequest::import_upload());
+    let custom = graph.add_task(TaskRequest::custom("!!!").field("answer", 42));
+    assert_eq!(custom.as_str(), "task");
+
+    let import_url = graph.import_url("https://example.test/input.docx");
+    let import_upload = graph.import_upload();
+    let import_base64 = graph.import_base64("UERG", "input.pdf");
+    let import_raw = graph.import_raw("%PDF-1.7", "raw.pdf");
+    let import_s3 = graph.import_s3("source-bucket", "eu-central-1", "access-id", "secret-key");
+    let import_azure = graph.import_azure_blob("storage-account", "documents");
+    let import_gcs = graph.import_google_cloud_storage(
+        "project-id",
+        "source-bucket",
+        "client@example.test",
+        "private-key",
+    );
+    let import_openstack = graph.import_openstack(
+        "https://openstack.example.test/auth",
+        "username",
+        "password",
+        "region-one",
+        "documents",
+    );
+    let import_sftp = graph.import_sftp("sftp.example.test", "username");
+    let convert = graph.convert([&explicit, &import_url], FileExtension::Pdf);
+    let convert_with = graph.convert_with(&convert, FileExtension::Png, |task| {
+        task.input_format(FileExtension::Pdf)
+    });
+    let optimize = graph.optimize(&convert_with);
+    let watermark_text = graph.watermark_text(&optimize, "Draft");
+    let _watermark_image = graph.watermark_image(&watermark_text, "logo-file");
+    let capture = graph.capture_website("https://example.test", FileExtension::Pdf);
+    let thumbnail = graph.thumbnail(&capture, FileExtension::Jpg);
+    let metadata = graph.metadata(&thumbnail);
+    let metadata_write = graph.metadata_write(&metadata);
+    let merge = graph.merge([&metadata_write, &import_upload], FileExtension::Pdf);
+    let archive = graph.archive([&merge, &import_base64, &import_raw], FileExtension::Zip);
+    let command = graph.command(&archive, "imagemagick", "convert", "$input $output");
+    let pdf_a = graph.pdf_a(&command);
+    let pdf_x = graph.pdf_x(&pdf_a);
+    let pdf_ocr = graph.pdf_ocr(&pdf_x);
+    let pdf_encrypt = graph.pdf_encrypt(&pdf_ocr);
+    let pdf_decrypt = graph.pdf_decrypt(&pdf_encrypt);
+    let pdf_split_pages = graph.pdf_split_pages(&pdf_decrypt);
+    let pdf_extract_pages = graph.pdf_extract_pages(&pdf_split_pages);
+    let pdf_rotate_pages = graph.pdf_rotate_pages([&pdf_extract_pages, &import_s3]);
+    let export_url = graph.export_url([&pdf_rotate_pages, &import_azure]);
+    let export_s3 = graph.export_s3(
+        [&export_url, &import_gcs],
+        "target-bucket",
+        "eu-central-1",
+        "access-id",
+        "secret-key",
+    );
+    let export_azure = graph.export_azure_blob(
+        [&export_s3, &import_openstack],
+        "storage-account",
+        "documents",
+    );
+    let export_gcs = graph.export_google_cloud_storage(
+        [&export_azure, &import_sftp],
+        "project-id",
+        "target-bucket",
+        "client@example.test",
+        "private-key",
+    );
+    let export_openstack = graph.export_openstack(
+        &export_gcs,
+        "https://openstack.example.test/auth",
+        "username",
+        "password",
+        "region-one",
+        "documents",
+    );
+    let export_sftp = graph.export_sftp(&export_openstack, "sftp.example.test", "username");
+    graph.export_upload(&export_sftp, "https://upload.example.test/report.pdf");
+
+    let job = graph.build();
+    let payload = serde_json::to_value(job).unwrap();
+    let tasks = payload["tasks"].as_object().unwrap();
+
+    assert_eq!(payload["tag"], "graph-shortcuts");
+    assert_eq!(payload["webhook_url"], "https://example.test/hook");
+    assert_eq!(payload["redirect"], true);
+    assert_eq!(payload["graph_mode"], "coverage");
+    assert_eq!(tasks["explicit-source"]["operation"], "import/upload");
+    assert_eq!(tasks["task"]["answer"], 42);
+    assert_eq!(
+        tasks["convert"]["input"],
+        json!(["explicit-source", "import-url"])
+    );
+    assert_eq!(tasks["convert-2"]["input"], "convert");
+    assert_eq!(tasks["watermark-2"]["image"], "logo-file");
+    assert_eq!(
+        tasks["merge"]["input"],
+        json!(["metadata-write", "import-upload"])
+    );
+    assert_eq!(
+        tasks["archive"]["input"],
+        json!(["merge", "import-base64", "import-raw"])
+    );
+    assert_eq!(
+        tasks["pdf-rotate-pages"]["input"],
+        json!(["pdf-extract-pages", "import-s3"])
+    );
+    assert_eq!(
+        tasks["export-url"]["input"],
+        json!(["pdf-rotate-pages", "import-azure-blob"])
+    );
+    assert_eq!(
+        tasks["export-s3"]["input"],
+        json!(["export-url", "import-google-cloud-storage"])
+    );
+    assert_eq!(
+        tasks["export-azure-blob"]["input"],
+        json!(["export-s3", "import-openstack"])
+    );
+    assert_eq!(
+        tasks["export-google-cloud-storage"]["input"],
+        json!(["export-azure-blob", "import-sftp"])
+    );
+    assert_eq!(tasks["export-upload"]["input"], "export-sftp");
+}
+
+#[test]
+fn job_request_debug_redacts_extra_values() {
+    let job = JobCreateRequest::builder()
+        .option("access_token", "secret-value")
+        .task(
+            "import-file",
+            ImportUrlTask::new("https://example.test/input.docx"),
+        )
+        .build();
+
+    let debug = format!("{job:?}");
+    assert!(debug.contains("access_token"));
+    assert!(debug.contains("REDACTED"));
+    assert!(!debug.contains("secret-value"));
+}
+
+#[test]
+#[should_panic(expected = "job builder shorthand requires a previous task")]
+fn job_builder_shorthand_panics_without_previous_task() {
+    let _ = JobCreateRequest::linear().convert(FileExtension::Pdf);
+}
+
+#[test]
 fn lifecycle_helpers_characterize_terminal_states_and_exports() {
     let job: cloudconvert_sdk::Job = serde_json::from_value(json!({
         "id": "job_1",
@@ -308,6 +772,143 @@ fn lifecycle_helpers_characterize_terminal_states_and_exports() {
     let unknown: cloudconvert_sdk::TaskStatus = serde_json::from_value(json!("paused")).unwrap();
     assert_eq!(unknown, cloudconvert_sdk::TaskStatus::Unknown);
     assert!(!unknown.is_terminal());
+}
+
+#[test]
+fn status_helpers_and_response_debug_cover_non_terminal_states() {
+    for (status, waiting, processing, finished, error, terminal) in [
+        (JobStatus::Waiting, true, false, false, false, false),
+        (JobStatus::Processing, false, true, false, false, false),
+        (JobStatus::Finished, false, false, true, false, true),
+        (JobStatus::Error, false, false, false, true, true),
+        (JobStatus::Unknown, false, false, false, false, false),
+    ] {
+        assert_eq!(status.is_waiting(), waiting);
+        assert_eq!(status.is_processing(), processing);
+        assert_eq!(status.is_finished(), finished);
+        assert_eq!(status.is_error(), error);
+        assert_eq!(status.is_terminal(), terminal);
+    }
+
+    for (status, waiting, queued, processing, finished, error, terminal) in [
+        (TaskStatus::Waiting, true, false, false, false, false, false),
+        (TaskStatus::Queued, false, true, false, false, false, false),
+        (
+            TaskStatus::Processing,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+        ),
+        (TaskStatus::Finished, false, false, false, true, false, true),
+        (TaskStatus::Error, false, false, false, false, true, true),
+        (
+            TaskStatus::Unknown,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+    ] {
+        assert_eq!(status.is_waiting(), waiting);
+        assert_eq!(status.is_queued(), queued);
+        assert_eq!(status.is_processing(), processing);
+        assert_eq!(status.is_finished(), finished);
+        assert_eq!(status.is_error(), error);
+        assert_eq!(status.is_terminal(), terminal);
+    }
+
+    let job: cloudconvert_sdk::Job = serde_json::from_value(json!({
+        "id": "job_error",
+        "tag": "debug-demo",
+        "status": "error",
+        "created_at": "2026-06-02T00:00:00+00:00",
+        "started_at": "2026-06-02T00:00:01+00:00",
+        "ended_at": "2026-06-02T00:00:02+00:00",
+        "links": {
+            "self": "https://api.example.test/v2/jobs/job_error"
+        },
+        "secret_extra": "job-secret",
+        "tasks": [
+            {
+                "id": "task_error",
+                "name": "convert-file",
+                "operation": "convert",
+                "status": "error",
+                "message": "conversion failed",
+                "code": "CONVERT_FAILED",
+                "credits": 1.5,
+                "created_at": "2026-06-02T00:00:00+00:00",
+                "started_at": "2026-06-02T00:00:01+00:00",
+                "ended_at": "2026-06-02T00:00:02+00:00",
+                "payload": {
+                    "access_key": "task-payload-secret"
+                },
+                "secret_extra": "task-extra-secret"
+            }
+        ]
+    }))
+    .unwrap();
+
+    assert!(job.is_error());
+    assert!(job.is_terminal());
+    let job_debug = format!("{job:?}");
+    assert!(job_debug.contains("secret_extra"));
+    assert!(job_debug.contains("REDACTED"));
+    assert!(!job_debug.contains("job-secret"));
+
+    let task = &job.tasks[0];
+    assert!(task.is_error());
+    assert!(task.is_terminal());
+    assert!(!task.is_export_url());
+    assert_eq!(task.files().count(), 0);
+    let task_debug = format!("{task:?}");
+    assert!(task_debug.contains("payload"));
+    assert!(task_debug.contains("REDACTED"));
+    assert!(!task_debug.contains("task-payload-secret"));
+    assert!(!task_debug.contains("task-extra-secret"));
+
+    let task: cloudconvert_sdk::Task = serde_json::from_value(json!({
+        "id": "task_export",
+        "job_id": "job_1",
+        "operation": "export/url",
+        "status": "finished",
+        "message": "done",
+        "code": null,
+        "credits": 0.5,
+        "created_at": "2026-06-02T00:00:00+00:00",
+        "started_at": "2026-06-02T00:00:01+00:00",
+        "ended_at": "2026-06-02T00:00:02+00:00",
+        "depends_on_tasks": {
+            "convert-file": "task_convert"
+        },
+        "result": {
+            "files": [
+                {
+                    "filename": "output.pdf",
+                    "url": "https://storage.example.test/output.pdf",
+                    "size": 123
+                }
+            ]
+        },
+        "payload": {
+            "access_key": "standalone-task-secret"
+        },
+        "secret_extra": "standalone-extra-secret"
+    }))
+    .unwrap();
+
+    assert!(task.is_finished());
+    assert!(task.is_terminal());
+    assert_eq!(task.files().next().unwrap().filename, "output.pdf");
+    let task_debug = format!("{task:?}");
+    assert!(task_debug.contains("REDACTED"));
+    assert!(!task_debug.contains("standalone-task-secret"));
+    assert!(!task_debug.contains("standalone-extra-secret"));
 }
 
 #[test]
@@ -506,8 +1107,10 @@ fn serializes_input_owned_value_conversions() {
 #[test]
 fn file_extensions_serialize_parse_and_normalize_known_formats() {
     assert_eq!(FileExtension::Pdf.as_str(), "pdf");
+    assert_eq!(FileExtension::Png.as_ref(), "png");
     assert_eq!(FileExtension::TarGz.to_string(), "tar.gz");
     assert_eq!(String::from(FileExtension::Docx), "docx");
+    assert_eq!(String::from(&FileExtension::Jpg), "jpg");
     assert_eq!(FileExtension::ALL.len(), 213);
 
     assert_eq!(".PDF".parse::<FileExtension>().unwrap(), FileExtension::Pdf);
@@ -518,6 +1121,12 @@ fn file_extensions_serialize_parse_and_normalize_known_formats() {
 
     let error = FileExtension::parse("nope").unwrap_err();
     assert_eq!(error.extension(), "nope");
+    assert_eq!(
+        error.to_string(),
+        "unsupported CloudConvert file extension: nope"
+    );
+    let error_trait: &dyn std::error::Error = &error;
+    assert!(error_trait.source().is_none());
 
     assert_eq!(
         serde_json::to_value(FileExtension::SevenZ).unwrap(),
@@ -568,6 +1177,21 @@ fn query_builders_preserve_serialized_parameter_names() {
             "include": "job",
             "per_page": 50,
             "page": 3
+        })
+    );
+
+    assert_eq!(
+        serde_json::to_value(JobGetQuery::default().include("tasks").redirect(true)).unwrap(),
+        json!({
+            "include": "tasks",
+            "redirect": true
+        })
+    );
+
+    assert_eq!(
+        serde_json::to_value(TaskGetQuery::default().include("job")).unwrap(),
+        json!({
+            "include": "job"
         })
     );
 

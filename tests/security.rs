@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{env, time::Duration};
 
 #[cfg(feature = "retry")]
 use cloudconvert_sdk::RetryPolicy;
@@ -206,6 +206,58 @@ fn secret_debug_output_is_redacted() {
     assert_eq!(format!("{refresh_token:?}"), "OAuthRefreshToken(REDACTED)");
     assert_eq!(format!("{client_secret:?}"), "OAuthClientSecret(REDACTED)");
     assert_eq!(format!("{signing_secret:?}"), "SigningSecret(REDACTED)");
+}
+
+#[test]
+fn credential_env_loaders_return_values_and_missing_errors() {
+    // These SDK-specific variables are only used by this test in the local suite.
+    unsafe {
+        env::set_var("CLOUDCONVERT_API_KEY", "cc_env_key");
+        env::set_var("CLOUDCONVERT_OAUTH_ACCESS_TOKEN", "oauth_env_access");
+        env::set_var("CLOUDCONVERT_OAUTH_REFRESH_TOKEN", "oauth_env_refresh");
+        env::set_var("CLOUDCONVERT_OAUTH_CLIENT_SECRET", "oauth_env_secret");
+    }
+
+    assert_eq!(
+        format!("{:?}", ApiKey::from_env().unwrap()),
+        "ApiKey(REDACTED)"
+    );
+    assert_eq!(
+        format!("{:?}", OAuthAccessToken::from_env().unwrap()),
+        "OAuthAccessToken(REDACTED)"
+    );
+    assert_eq!(
+        format!("{:?}", OAuthRefreshToken::from_env().unwrap()),
+        "OAuthRefreshToken(REDACTED)"
+    );
+    assert_eq!(
+        format!("{:?}", OAuthClientSecret::from_env().unwrap()),
+        "OAuthClientSecret(REDACTED)"
+    );
+
+    unsafe {
+        env::remove_var("CLOUDCONVERT_API_KEY");
+        env::remove_var("CLOUDCONVERT_OAUTH_ACCESS_TOKEN");
+        env::remove_var("CLOUDCONVERT_OAUTH_REFRESH_TOKEN");
+        env::remove_var("CLOUDCONVERT_OAUTH_CLIENT_SECRET");
+    }
+
+    assert!(matches!(
+        ApiKey::from_env(),
+        Err(Error::MissingEnv("CLOUDCONVERT_API_KEY"))
+    ));
+    assert!(matches!(
+        OAuthAccessToken::from_env(),
+        Err(Error::MissingEnv("CLOUDCONVERT_OAUTH_ACCESS_TOKEN"))
+    ));
+    assert!(matches!(
+        OAuthRefreshToken::from_env(),
+        Err(Error::MissingEnv("CLOUDCONVERT_OAUTH_REFRESH_TOKEN"))
+    ));
+    assert!(matches!(
+        OAuthClientSecret::from_env(),
+        Err(Error::MissingEnv("CLOUDCONVERT_OAUTH_CLIENT_SECRET"))
+    ));
 }
 
 #[test]

@@ -17,9 +17,9 @@ use axum::{
 use cloudconvert_sdk::RetryPolicy;
 use cloudconvert_sdk::{
     ApiKey, CloudConvertClient, ConvertTask, Error, ImportUrlTask, JobCreateRequest, JobListQuery,
-    OAuthAccessToken, OAuthClient, OAuthClientSecret, OAuthScope, OperationListQuery,
-    OperationOptionKind, OperationValidationErrorKind, Task, TaskRequest, TransportConfig,
-    WatermarkTask,
+    OAuthAccessToken, OAuthClient, OAuthClientSecret, OAuthScope, Operation, OperationListQuery,
+    OperationOption, OperationOptionKind, OperationValidationErrorKind, OperationValidationMode,
+    SocketChannel, Task, TaskRequest, TransportConfig, WatermarkTask,
 };
 use futures_util::stream;
 use serde_json::{Value, json};
@@ -266,6 +266,147 @@ async fn operation_metadata_validates_task_requests_when_requested() {
     assert_eq!(error.kind, OperationValidationErrorKind::UnknownOption);
 }
 
+#[test]
+fn operation_metadata_covers_wire_variants_and_validation_helpers() {
+    let operation: Operation = serde_json::from_value(json!({
+        "operation": "convert",
+        "options": {
+            "width": {
+                "type": "integer",
+                "required": true
+            },
+            "mode": {
+                "type": "enum",
+                "values": ["fast", "best"]
+            }
+        },
+        "engine_versions": [
+            "1.0",
+            {
+                "version": "1.1",
+                "latest": true,
+                "deprecated": false
+            }
+        ],
+        "undocumented": true
+    }))
+    .unwrap();
+
+    assert_eq!(
+        operation
+            .options()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>(),
+        vec!["mode", "width"]
+    );
+    assert_eq!(operation.option("width").unwrap().name(), Some("width"));
+    assert_eq!(
+        operation.engine_version_values().collect::<Vec<_>>(),
+        vec!["1.0", "1.1"]
+    );
+    assert!(operation.default_engine_version().is_none());
+    assert_eq!(operation.latest_engine_version().unwrap().version, "1.1");
+    assert_eq!(operation.extra["undocumented"], true);
+
+    let strict_common_fields = TaskRequest::custom("convert")
+        .field("input", "import-file")
+        .field("ignore_error", true)
+        .field("input_format", "pdf")
+        .field("output_format", "png")
+        .field("engine", "poppler")
+        .field("engine_version", "1.0")
+        .field("filename", "output.png")
+        .field("timeout", 60)
+        .field("width", 800)
+        .field("mode", "fast");
+    let strict_common_fields = TaskRequest::from(strict_common_fields);
+    operation
+        .validate_task_with_mode(&strict_common_fields, OperationValidationMode::Strict)
+        .unwrap();
+
+    let mismatch = operation
+        .validate_task(&TaskRequest::metadata("import-file"))
+        .unwrap_err();
+    assert_eq!(
+        mismatch.kind,
+        OperationValidationErrorKind::OperationMismatch
+    );
+    assert!(
+        mismatch
+            .to_string()
+            .contains("operation convert failed validation")
+    );
+    let source: &dyn std::error::Error = &mismatch;
+    assert!(source.source().is_none());
+
+    let kinds = [
+        (
+            OperationOptionKind::String,
+            "string",
+            json!("text"),
+            json!(true),
+        ),
+        (
+            OperationOptionKind::Boolean,
+            "boolean",
+            json!(true),
+            json!("true"),
+        ),
+        (
+            OperationOptionKind::Integer,
+            "integer",
+            json!(42),
+            json!(42.5),
+        ),
+        (
+            OperationOptionKind::Float,
+            "float",
+            json!(42.5),
+            json!("42.5"),
+        ),
+        (OperationOptionKind::Enum, "enum", json!("fast"), json!(1)),
+        (
+            OperationOptionKind::Dictionary,
+            "dictionary",
+            json!({"key": "value"}),
+            json!(["key", "value"]),
+        ),
+        (
+            OperationOptionKind::Array,
+            "array",
+            json!(["value"]),
+            json!({"key": "value"}),
+        ),
+        (
+            OperationOptionKind::Other("new-kind".to_string()),
+            "new-kind",
+            json!(null),
+            json!(null),
+        ),
+    ];
+
+    for (kind, name, valid, invalid) in kinds {
+        assert_eq!(kind.as_str(), name);
+        assert_eq!(
+            serde_json::from_value::<OperationOptionKind>(json!(name)).unwrap(),
+            kind
+        );
+        assert_eq!(serde_json::to_value(&kind).unwrap(), json!(name));
+
+        let option: OperationOption = serde_json::from_value(json!({
+            "name": name,
+            "type": name
+        }))
+        .unwrap();
+        option.validate_value(&valid).unwrap();
+        if !matches!(kind, OperationOptionKind::Other(_)) {
+            let error = option.validate_value(&invalid).unwrap_err();
+            assert_eq!(error.kind, OperationValidationErrorKind::InvalidOptionType);
+            assert!(error.to_string().contains(name));
+        }
+    }
+}
+
 #[tokio::test]
 async fn oauth_client_builds_urls_exchanges_tokens_and_authorizes_api_calls() {
     let api = MockApi::spawn().await;
@@ -297,6 +438,10 @@ async fn oauth_client_builds_urls_exchanges_tokens_and_authorizes_api_calls() {
         .exchange_code("authorization_code_1", "https://app.example.test/callback")
         .await
         .unwrap();
+    assert_eq!(
+        format!("{:?}", token.access_token()),
+        "OAuthAccessToken(REDACTED)"
+    );
     assert_eq!(token.token_type.as_deref(), Some("Bearer"));
     assert_eq!(token.expires_in, Some(3600));
     assert!(format!("{token:?}").contains("REDACTED"));
@@ -322,6 +467,35 @@ async fn oauth_client_builds_urls_exchanges_tokens_and_authorizes_api_calls() {
         Some("Bearer oauth_access_token_1")
     );
 
+    let token_for_builder = oauth
+        .exchange_code("authorization_code_2", "https://app.example.test/callback")
+        .await
+        .unwrap();
+    let client = token_for_builder
+        .into_client_builder()
+        .with_base_urls(api.base_url.clone(), api.base_url.clone())
+        .build()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(client.socket_subscription(SocketChannel::custom("private-test")))
+            .unwrap(),
+        json!({
+            "channel": "private-test",
+            "auth": {
+                "headers": {
+                    "Authorization": "Bearer oauth_access_token_1"
+                }
+            }
+        })
+    );
+
+    let access_token = oauth
+        .exchange_code("authorization_code_3", "https://app.example.test/callback")
+        .await
+        .unwrap()
+        .into_access_token();
+    assert_eq!(format!("{access_token:?}"), "OAuthAccessToken(REDACTED)");
+
     let token_bodies = api.observed.oauth_token_bodies.lock().await;
     let joined = token_bodies
         .iter()
@@ -331,6 +505,58 @@ async fn oauth_client_builds_urls_exchanges_tokens_and_authorizes_api_calls() {
     assert!(joined.contains("grant_type=authorization_code"));
     assert!(joined.contains("grant_type=refresh_token"));
     assert!(joined.contains("client_secret=client_secret_1"));
+}
+
+#[test]
+fn oauth_accessors_and_scope_conversions_cover_public_surface() {
+    let oauth = OAuthClient::new("client_1", OAuthClientSecret::new("client_secret_1")).unwrap();
+    assert_eq!(oauth.client_id(), "client_1");
+    assert_eq!(
+        oauth.authorize_url().as_str(),
+        "https://cloudconvert.com/oauth/authorize"
+    );
+    assert_eq!(
+        oauth.token_url().as_str(),
+        "https://cloudconvert.com/oauth/token"
+    );
+    assert!(format!("{oauth:?}").contains("OAuthClient"));
+    assert!(!format!("{oauth:?}").contains("client_secret_1"));
+
+    let authorization_code = oauth
+        .authorization_code_url(
+            "https://app.example.test/callback",
+            [
+                OAuthScope::UserRead,
+                OAuthScope::UserWrite,
+                OAuthScope::WebhookRead,
+                OAuthScope::WebhookWrite,
+                OAuthScope::from(String::from("custom.scope")),
+            ],
+        )
+        .unwrap();
+    assert!(authorization_code.as_str().contains("response_type=code"));
+    assert!(
+        authorization_code
+            .as_str()
+            .contains("scope=user.read+user.write+webhook.read+webhook.write+custom.scope")
+    );
+
+    let implicit = oauth
+        .implicit_url_with_state(
+            "https://app.example.test/callback",
+            Vec::<OAuthScope>::new(),
+            "state_2",
+        )
+        .unwrap();
+    assert!(implicit.as_str().contains("response_type=token"));
+    assert!(implicit.as_str().contains("state=state_2"));
+    assert!(!implicit.as_str().contains("scope="));
+
+    assert_eq!(
+        serde_json::to_value(OAuthScope::TaskRead).unwrap(),
+        json!("task.read")
+    );
+    assert_eq!(OAuthScope::from("task.read").as_str(), "task.read");
 }
 
 #[tokio::test]

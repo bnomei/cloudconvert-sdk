@@ -501,6 +501,8 @@ fn socket_error(error: impl fmt::Display) -> Error {
 #[cfg(all(test, feature = "socket"))]
 mod managed_socket_tests {
     use super::*;
+    use std::time::Duration;
+
     use serde_json::json;
 
     #[test]
@@ -541,5 +543,106 @@ mod managed_socket_tests {
         assert_eq!(event.task_event(), Some(TaskSocketEvent::Updated));
         assert!(event.is_updated());
         assert!(event.task().unwrap().is_none());
+    }
+
+    #[test]
+    fn socket_event_decodes_task_payload_and_status_helpers() {
+        let event = SocketEvent::from_payload(
+            "task.failed",
+            Payload::from(
+                json!({
+                    "task": {
+                        "id": "task_1",
+                        "job_id": "job_1",
+                        "operation": "convert",
+                        "status": "error"
+                    }
+                })
+                .to_string(),
+            ),
+        );
+
+        assert_eq!(event.event(), "task.failed");
+        assert_eq!(event.channel(), None);
+        assert_eq!(event.kind(), SocketEventKind::Task(TaskSocketEvent::Failed));
+        assert_eq!(event.task_event(), Some(TaskSocketEvent::Failed));
+        assert_eq!(event.job_event(), None);
+        assert!(event.is_task_event());
+        assert!(!event.is_job_event());
+        assert!(event.is_failed());
+        assert!(event.is_terminal());
+        assert_eq!(event.task().unwrap().unwrap().id, "task_1");
+        assert!(event.job().unwrap().is_none());
+    }
+
+    #[test]
+    fn socket_event_handles_created_updated_binary_and_unknown_payloads() {
+        let created = SocketEvent::from_payload(
+            "task.created",
+            Payload::Text(vec![
+                json!("private-task.task_1"),
+                json!({
+                    "task": {
+                        "id": "task_1",
+                        "job_id": "job_1",
+                        "operation": "convert",
+                        "status": "waiting"
+                    }
+                }),
+            ]),
+        );
+        assert_eq!(created.channel(), Some("private-task.task_1"));
+        assert!(created.is_created());
+        assert!(!created.is_terminal());
+
+        let binary = SocketEvent::from_payload(
+            "job.updated",
+            Payload::Binary(bytes::Bytes::from_static(&[1, 2, 3])),
+        );
+        assert_eq!(binary.data(), &json!([1, 2, 3]));
+        assert!(binary.is_updated());
+
+        let string = SocketEvent::from_payload("job.created", Payload::from("raw".to_string()));
+        assert_eq!(string.data(), &json!("raw"));
+        assert!(string.is_created());
+
+        let unknown = SocketEvent::from_payload(
+            "custom.event",
+            Payload::Text(vec![json!("one"), json!("two"), json!("three")]),
+        );
+        assert_eq!(
+            unknown.kind(),
+            SocketEventKind::Other("custom.event".to_string())
+        );
+        assert_eq!(unknown.kind().name(), "custom.event");
+        assert!(!unknown.kind().is_job());
+        assert!(!unknown.kind().is_task());
+        assert!(!unknown.is_job_event());
+        assert!(!unknown.is_task_event());
+        assert_eq!(unknown.data(), &json!(["one", "two", "three"]));
+    }
+
+    #[test]
+    fn socket_event_reports_json_decode_errors_for_bad_payload_fields() {
+        let event = SocketEvent::from_payload(
+            "job.finished",
+            Payload::Text(vec![json!({
+                "job": "not a job object"
+            })]),
+        );
+
+        assert!(matches!(event.job().unwrap_err(), Error::Json(_)));
+    }
+
+    #[tokio::test]
+    async fn socket_connect_reports_socket_errors_for_unavailable_local_endpoint() {
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            CloudConvertSocket::connect("http://127.0.0.1:1", Vec::<SocketSubscription>::new()),
+        )
+        .await
+        .expect("local refused socket connection should finish quickly");
+
+        assert!(matches!(result, Err(Error::Socket(_))));
     }
 }
