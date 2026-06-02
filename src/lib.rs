@@ -1,15 +1,13 @@
 //! Async Rust SDK primitives for the CloudConvert API v2.
 //!
-//! This crate exposes typed request and response models for common CloudConvert
-//! jobs and tasks, plus a [`CloudConvertClient`] for calling the API from async
-//! Rust applications. Operation-specific drift is handled through `option(...)`
-//! builder methods and `extra` maps.
+//! This crate exposes typed request and response models for CloudConvert jobs
+//! and tasks, plus a [`CloudConvertClient`] for calling the API from async Rust
+//! applications. Operation-specific drift is handled through `option(...)`
+//! builder methods, `extra` maps, and [`TaskRequest::custom`].
 //!
-//! # Build a job request
+//! # Build jobs
 //!
-//! For a simple linear job, use [`JobCreateRequest::linear`] and job-level task
-//! shorthands. The SDK still creates the task names required by CloudConvert,
-//! but callers do not need to spell them out.
+//! Use [`JobCreateRequest::linear`] when each task feeds into the next task.
 //!
 //! ```
 //! use cloudconvert_sdk::{FileExtension, JobCreateRequest};
@@ -26,10 +24,29 @@
 //! assert_eq!(payload["tasks"]["export-url"]["input"], "convert");
 //! ```
 //!
-//! # Branch a job graph
+//! Use `*_with(...)` methods to configure task-specific options while keeping a
+//! serial pipeline.
 //!
-//! Use [`JobCreateRequest::graph`] when later tasks need to reference specific
-//! earlier tasks, for example in a branch or join.
+//! ```
+//! use cloudconvert_sdk::{FileExtension, JobCreateRequest};
+//!
+//! let request = JobCreateRequest::linear()
+//!     .import_url_with("https://example.test/input.docx", |task| {
+//!         task.filename("input.docx")
+//!     })
+//!     .convert_with(FileExtension::Pdf, |task| {
+//!         task.input_format(FileExtension::Docx)
+//!     })
+//!     .export_url()
+//!     .build();
+//!
+//! let payload = serde_json::to_value(request).unwrap();
+//! assert_eq!(payload["tasks"]["import-url"]["filename"], "input.docx");
+//! assert_eq!(payload["tasks"]["convert"]["input_format"], "docx");
+//! ```
+//!
+//! Use [`JobCreateRequest::graph`] when a job branches, joins multiple inputs,
+//! or needs to reference a non-adjacent task.
 //!
 //! ```
 //! use cloudconvert_sdk::{FileExtension, JobCreateRequest};

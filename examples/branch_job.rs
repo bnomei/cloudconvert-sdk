@@ -1,3 +1,5 @@
+//! Builds a branched job graph and prints the JSON payload.
+
 use cloudconvert_sdk::{FileExtension, JobCreateRequest};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

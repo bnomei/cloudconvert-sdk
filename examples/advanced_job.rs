@@ -1,3 +1,5 @@
+//! Builds a multi-file graph with merge, watermark, and archive export tasks.
+
 use cloudconvert_sdk::{
     FileExtension, JobCreateRequest, Layer, PositionHorizontal, PositionVertical,
 };

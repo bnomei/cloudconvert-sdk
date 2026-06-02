@@ -7,6 +7,11 @@ use crate::file_extension::normalize_file_extension;
 
 pub type ExtraOptions = BTreeMap<String, Value>;
 
+/// Input dependency for a CloudConvert task.
+///
+/// Most SDK methods accept `impl Into<Input>`, so callers can pass a task name,
+/// a [`crate::TaskName`] handle, or a collection of task names for multi-input
+/// operations such as `merge` and `export/url`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(untagged)]
 #[non_exhaustive]
@@ -41,18 +46,21 @@ impl From<Vec<&str>> for Input {
 
 /// Serialized task request used by job and standalone task APIs.
 ///
-/// Most users can build linear jobs through [`crate::JobBuilder`] shorthands.
-/// Use `TaskRequest` directly when you need to branch, create standalone tasks,
-/// or call a CloudConvert operation that does not have a first-class builder.
+/// Most jobs can be built with [`crate::JobCreateRequest::linear`] or
+/// [`crate::JobCreateRequest::graph`]. Use `TaskRequest` directly for
+/// standalone task APIs, explicit low-level job construction, or operations that
+/// do not have a first-class typed builder yet.
 ///
 /// ```
-/// use cloudconvert_sdk::{FileExtension, JobCreateRequest, TaskRequest};
+/// use cloudconvert_sdk::{FileExtension, JobCreateRequest};
 ///
-/// let mut builder = JobCreateRequest::builder();
-/// let import = builder.add_task(TaskRequest::import_url("https://example.test/input.docx"));
-/// builder.add_task(TaskRequest::convert(&import, FileExtension::Pdf));
+/// let request = JobCreateRequest::graph(|job| {
+///     let import = job.import_url("https://example.test/input.docx");
+///     job.convert(&import, FileExtension::Pdf);
+/// })
+/// .build();
 ///
-/// let payload = serde_json::to_value(builder.build()).unwrap();
+/// let payload = serde_json::to_value(request).unwrap();
 /// assert_eq!(payload["tasks"]["convert"]["input"], "import-url");
 /// ```
 #[derive(Clone)]

@@ -105,9 +105,9 @@ pub struct ApiResponse<T> {
 
 /// Request body for `POST /v2/jobs`.
 ///
-/// Use [`JobCreateRequest::linear`] for serial jobs and
-/// [`JobCreateRequest::graph`] for branches or joins. Both paths generate the
-/// internal task names CloudConvert requires.
+/// Use [`JobCreateRequest::linear`] for serial pipelines and
+/// [`JobCreateRequest::graph`] for branches or joins. Both builders generate
+/// the task names CloudConvert requires.
 ///
 /// ```
 /// use cloudconvert_sdk::{FileExtension, JobCreateRequest};
@@ -136,8 +136,8 @@ pub struct JobCreateRequest {
 
 /// Name assigned to a task in a CloudConvert job request.
 ///
-/// Use values returned by [`JobGraphBuilder`] methods or
-/// [`JobBuilder::add_task`] as dependency inputs for later tasks.
+/// `TaskName` is the serialized task-map key. Pass handles returned by
+/// [`JobGraphBuilder`] methods as dependency inputs for later graph tasks.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TaskName(String);
 
@@ -213,20 +213,20 @@ impl<const N: usize> From<[&TaskName; N]> for Input {
 }
 
 impl JobCreateRequest {
-    /// Starts building a job creation request.
+    /// Starts a general-purpose job builder.
+    ///
+    /// Prefer [`JobCreateRequest::linear`] for serial pipelines and
+    /// [`JobCreateRequest::graph`] for branch or join jobs.
     pub fn builder() -> JobBuilder {
         JobBuilder::default()
     }
 
-    /// Starts building a linear job creation request.
-    ///
-    /// This is a semantic alias for [`JobCreateRequest::builder`]. Use it when
-    /// you want the request to read as a serial task pipeline.
+    /// Starts a job builder for a serial task pipeline.
     pub fn linear() -> JobBuilder {
         Self::builder()
     }
 
-    /// Builds a branched job graph with task handles scoped to a closure.
+    /// Builds a job graph with task handles scoped to a closure.
     ///
     /// Each graph method returns a [`TaskName`] that can be passed as the input
     /// for later tasks. The returned [`JobBuilder`] can still be used to set
@@ -293,11 +293,10 @@ impl fmt::Debug for JobCreateRequest {
 }
 
 #[derive(Clone, Debug, Default)]
-/// Builder for [`JobCreateRequest`].
+/// Builder for serial [`JobCreateRequest`] pipelines.
 ///
 /// For linear jobs, use the fluent task shorthands and let the SDK wire each
-/// task to the previous task. [`JobCreateRequest::linear`] returns this builder
-/// with a more descriptive entry point.
+/// task to the previous task.
 ///
 /// ```
 /// use cloudconvert_sdk::{FileExtension, JobCreateRequest};
@@ -312,9 +311,9 @@ impl fmt::Debug for JobCreateRequest {
 /// assert_eq!(payload["tasks"]["export-url"]["input"], "convert");
 /// ```
 ///
-/// Use `*_with(...)` methods when a task needs options, and
-/// [`JobCreateRequest::graph`] when you need task handles for branching or
-/// reuse.
+/// Use `*_with(...)` methods when a task needs options. Use
+/// [`JobCreateRequest::graph`] when a later task needs a handle to a specific
+/// earlier task.
 pub struct JobBuilder {
     request: JobCreateRequest,
     last_task: Option<TaskName>,
@@ -1095,8 +1094,8 @@ impl From<JobBuilder> for JobCreateRequest {
 /// Builder for branched CloudConvert job graphs.
 ///
 /// `JobGraphBuilder` is usually used through [`JobCreateRequest::graph`]. Each
-/// task method appends one task and returns a [`TaskName`] handle for wiring
-/// later tasks.
+/// task method appends one task and returns a [`TaskName`] handle that can be
+/// passed to later graph methods.
 ///
 /// ```
 /// use cloudconvert_sdk::{FileExtension, JobCreateRequest};
@@ -1119,6 +1118,9 @@ pub struct JobGraphBuilder {
 
 impl JobGraphBuilder {
     /// Creates an empty graph builder.
+    ///
+    /// Prefer [`JobCreateRequest::graph`] when the graph can be configured in a
+    /// single closure.
     pub fn new() -> Self {
         Self::default()
     }

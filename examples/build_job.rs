@@ -1,3 +1,5 @@
+//! Builds a simple import/convert/export job and prints the JSON payload.
+
 use cloudconvert_sdk::{FileExtension, JobCreateRequest};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

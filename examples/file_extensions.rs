@@ -1,3 +1,5 @@
+//! Parses and prints known CloudConvert file extension tokens.
+
 use cloudconvert_sdk::FileExtension;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
