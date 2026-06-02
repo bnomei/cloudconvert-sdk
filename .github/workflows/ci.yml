@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Rustfmt Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  check:
+    name: Check (${{ matrix.features.name }})
+    needs: [fmt]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - name: default
+            args: ""
+          - name: all-features
+            args: "--all-features"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}-${{ runner.arch }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
+
+      - name: Run cargo check
+        run: cargo check --workspace --all-targets --locked ${{ matrix.features.args }}
+
+  clippy:
+    name: Clippy Check
+    needs: [fmt]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}-${{ runner.arch }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  test:
+    name: Test Suite (${{ matrix.features.name }})
+    needs: [fmt]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - name: default
+            args: ""
+          - name: all-features
+            args: "--all-features"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}-${{ runner.arch }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
+
+      - name: Run tests
+        env:
+          CLOUDCONVERT_API_KEY: ""
+        run: cargo test --workspace --all-targets --locked ${{ matrix.features.args }}
+
+  coverage:
+    name: Coverage
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: coverage-${{ runner.os }}-${{ runner.arch }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage report
+        env:
+          CLOUDCONVERT_API_KEY: ""
+        run: >
+          cargo llvm-cov
+          --workspace
+          --all-targets
+          --all-features
+          --locked
+          --ignore-filename-regex '(^|/)tests/'
+          --html
+          --output-dir target/llvm-cov/html
+          --fail-under-lines 95
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-cov-html
+          path: target/llvm-cov/html
+          if-no-files-found: error
