@@ -50,6 +50,9 @@ pub enum Error {
     #[error("invalid CloudConvert region")]
     InvalidRegion,
 
+    #[error("{0}")]
+    InvalidBuilderState(#[from] InvalidBuilderState),
+
     #[cfg(feature = "socket")]
     #[error("Socket.IO operation failed: {0}")]
     Socket(String),
@@ -88,6 +91,43 @@ pub struct ApiError<'a> {
     pub errors: Option<&'a Value>,
     pub rate_limit: Option<&'a RateLimit>,
     pub retry_after: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidBuilderState {
+    pub kind: InvalidBuilderStateKind,
+    pub builder: &'static str,
+    pub method: &'static str,
+}
+
+impl InvalidBuilderState {
+    pub(crate) fn missing_previous_task(method: &'static str) -> Self {
+        Self {
+            kind: InvalidBuilderStateKind::MissingPreviousTask,
+            builder: "JobBuilder",
+            method,
+        }
+    }
+}
+
+impl std::fmt::Display for InvalidBuilderState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            InvalidBuilderStateKind::MissingPreviousTask => write!(
+                formatter,
+                "invalid {} state in {}: shorthand requires a previous task",
+                self.builder, self.method
+            ),
+        }
+    }
+}
+
+impl std::error::Error for InvalidBuilderState {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum InvalidBuilderStateKind {
+    MissingPreviousTask,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

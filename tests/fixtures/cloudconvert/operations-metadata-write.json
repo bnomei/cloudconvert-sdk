@@ -1,0 +1,49 @@
+{
+  "data": [
+    {
+      "operation": "metadata/write",
+      "input_format": "pdf",
+      "engine": "exiftool",
+      "credits": 1,
+      "options": {
+        "metadata": {
+          "type": "dictionary",
+          "required": true,
+          "label": "Metadata fields"
+        },
+        "remove": {
+          "type": "array",
+          "required": false,
+          "possible_values": ["Author", "Title", "Subject", "Keywords"]
+        },
+        "filename": {
+          "type": "string",
+          "required": false
+        }
+      },
+      "engine_versions": [
+        "12.60",
+        {
+          "version": "12.70",
+          "default": true,
+          "latest": true
+        }
+      ]
+    }
+  ],
+  "links": {
+    "first": "https://api.cloudconvert.com/v2/operations?page=1",
+    "last": "https://api.cloudconvert.com/v2/operations?page=1",
+    "prev": null,
+    "next": null
+  },
+  "meta": {
+    "current_page": 1,
+    "from": 1,
+    "path": "https://api.cloudconvert.com/v2/operations",
+    "per_page": 100,
+    "to": 1,
+    "total": 1,
+    "last_page": 1
+  }
+}

@@ -12,16 +12,19 @@
 //! ```
 //! use cloudconvert_sdk::{FileExtension, JobCreateRequest};
 //!
+//! # fn main() -> cloudconvert_sdk::Result<()> {
 //! let request = JobCreateRequest::linear()
 //!     .import_url("https://example.test/input.docx")
-//!     .convert(FileExtension::Pdf)
-//!     .export_url()
+//!     .convert(FileExtension::Pdf)?
+//!     .export_url()?
 //!     .build();
 //!
 //! let payload = serde_json::to_value(request).unwrap();
 //! assert_eq!(payload["tasks"]["import-url"]["operation"], "import/url");
 //! assert_eq!(payload["tasks"]["convert"]["input"], "import-url");
 //! assert_eq!(payload["tasks"]["export-url"]["input"], "convert");
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Use `*_with(...)` methods to configure task-specific options while keeping a
@@ -30,19 +33,22 @@
 //! ```
 //! use cloudconvert_sdk::{FileExtension, JobCreateRequest};
 //!
+//! # fn main() -> cloudconvert_sdk::Result<()> {
 //! let request = JobCreateRequest::linear()
 //!     .import_url_with("https://example.test/input.docx", |task| {
 //!         task.filename("input.docx")
 //!     })
 //!     .convert_with(FileExtension::Pdf, |task| {
 //!         task.input_format(FileExtension::Docx)
-//!     })
-//!     .export_url()
+//!     })?
+//!     .export_url()?
 //!     .build();
 //!
 //! let payload = serde_json::to_value(request).unwrap();
 //! assert_eq!(payload["tasks"]["import-url"]["filename"], "input.docx");
 //! assert_eq!(payload["tasks"]["convert"]["input_format"], "docx");
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Use [`JobCreateRequest::graph`] when a job branches, joins multiple inputs,
@@ -80,8 +86,8 @@
 //! let client = CloudConvertClient::builder(ApiKey::from_env()?).build()?;
 //! let request = JobCreateRequest::linear()
 //!     .import_url("https://example.test/input.docx")
-//!     .convert(FileExtension::Pdf)
-//!     .export_url()
+//!     .convert(FileExtension::Pdf)?
+//!     .export_url()?
 //!     .build();
 //!
 //! let job = client.jobs().create(request).await?;
@@ -119,7 +125,7 @@ pub use config::{
     ApiKey, ClientBuilder, CloudConvertConfig, OAuthAccessToken, OAuthClientSecret,
     OAuthRefreshToken, Region, SigningSecret, TransportConfig,
 };
-pub use error::{ApiError, Error, Result};
+pub use error::{ApiError, Error, InvalidBuilderState, InvalidBuilderStateKind, Result};
 pub use file_extension::{FileExtension, ParseFileExtensionError};
 pub use jobs::{
     ApiResponse, FileResult, Job, JobBuilder, JobCreateRequest, JobGetQuery, JobGraphBuilder,

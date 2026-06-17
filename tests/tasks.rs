@@ -4,11 +4,11 @@ use cloudconvert_sdk::{
     ArchiveTask, AzureBlobExportTask, AzureBlobImportTask, Base64ImportTask, CaptureWebsiteTask,
     CommandTask, ConvertTask, ExportUploadTask, ExportUrlTask, FileExtension,
     GoogleCloudStorageExportTask, GoogleCloudStorageImportTask, ImportUploadTask, ImportUrlTask,
-    Input, JobCreateRequest, JobGetQuery, JobGraphBuilder, JobListQuery, JobStatus, Layer,
-    MergeTask, MetadataTask, MetadataWriteTask, OpenStackExportTask, OpenStackImportTask,
-    OperationListQuery, OptimizeTask, PdfATask, PositionHorizontal, PositionVertical,
-    RawImportTask, S3ExportTask, S3ImportTask, SftpExportTask, SftpImportTask, TaskGetQuery,
-    TaskListQuery, TaskName, TaskRequest, TaskStatus, ThumbnailTask, WatermarkTask,
+    Input, InvalidBuilderStateKind, JobCreateRequest, JobGetQuery, JobGraphBuilder, JobListQuery,
+    JobStatus, Layer, MergeTask, MetadataTask, MetadataWriteTask, OpenStackExportTask,
+    OpenStackImportTask, OperationListQuery, OptimizeTask, PdfATask, PositionHorizontal,
+    PositionVertical, RawImportTask, S3ExportTask, S3ImportTask, SftpExportTask, SftpImportTask,
+    TaskGetQuery, TaskListQuery, TaskName, TaskRequest, TaskStatus, ThumbnailTask, WatermarkTask,
     WebhookCreateRequest, WebhookEvent, WebhookListQuery,
 };
 use rstest::rstest;
@@ -123,12 +123,12 @@ fn job_builder_can_generate_task_names_as_dependency_handles() {
 }
 
 #[test]
-fn job_builder_task_shorthands_chain_using_previous_task_input() {
+fn job_builder_task_shorthands_chain_using_previous_task_input() -> cloudconvert_sdk::Result<()> {
     let job = JobCreateRequest::builder()
         .tag("shortcut-demo")
         .import_url("https://example.test/input.docx")
-        .convert(FileExtension::Pdf)
-        .export_url()
+        .convert(FileExtension::Pdf)?
+        .export_url()?
         .build();
 
     let payload = serde_json::to_value(job).unwrap();
@@ -143,10 +143,12 @@ fn job_builder_task_shorthands_chain_using_previous_task_input() {
     assert_eq!(payload["tasks"]["convert"]["output_format"], "pdf");
     assert_eq!(payload["tasks"]["export-url"]["operation"], "export/url");
     assert_eq!(payload["tasks"]["export-url"]["input"], "convert");
+    Ok(())
 }
 
 #[test]
-fn job_linear_shorthands_configure_tasks_without_manual_task_constructors() {
+fn job_linear_shorthands_configure_tasks_without_manual_task_constructors()
+-> cloudconvert_sdk::Result<()> {
     let job = JobCreateRequest::linear()
         .tag("configured-linear-demo")
         .import_url_with("https://example.test/input.docx", |task| {
@@ -156,13 +158,13 @@ fn job_linear_shorthands_configure_tasks_without_manual_task_constructors() {
             task.input_format(".DOCX")
                 .engine("office")
                 .filename("converted.pdf")
-        })
+        })?
         .optimize_with(|task| {
             task.input_format(FileExtension::Pdf)
                 .profile("print")
                 .filename("converted-optimized.pdf")
-        })
-        .export_url_with(|task| task.inline(false))
+        })?
+        .export_url_with(|task| task.inline(false))?
         .build();
 
     let payload = serde_json::to_value(job).unwrap();
@@ -182,6 +184,7 @@ fn job_linear_shorthands_configure_tasks_without_manual_task_constructors() {
     );
     assert_eq!(payload["tasks"]["export-url"]["input"], "optimize");
     assert_eq!(payload["tasks"]["export-url"]["inline"], false);
+    Ok(())
 }
 
 #[test]
@@ -283,7 +286,7 @@ fn task_name_conversions_cover_owned_and_borrowed_inputs() {
 }
 
 #[test]
-fn job_builder_covers_linear_shortcut_surface() {
+fn job_builder_covers_linear_shortcut_surface() -> cloudconvert_sdk::Result<()> {
     let job = JobCreateRequest::linear()
         .tag("all-linear-shortcuts")
         .webhook_url("https://example.test/hook")
@@ -309,44 +312,44 @@ fn job_builder_covers_linear_shortcut_surface() {
             "documents",
         )
         .import_sftp("sftp.example.test", "username")
-        .convert(FileExtension::Pdf)
-        .convert_with_input_format(FileExtension::Pdf, FileExtension::Png)
-        .optimize()
-        .watermark_text("Draft")
-        .watermark_image("logo-file")
+        .convert(FileExtension::Pdf)?
+        .convert_with_input_format(FileExtension::Pdf, FileExtension::Png)?
+        .optimize()?
+        .watermark_text("Draft")?
+        .watermark_image("logo-file")?
         .capture_website("https://example.test", FileExtension::Pdf)
-        .thumbnail(FileExtension::Jpg)
-        .metadata()
-        .metadata_write()
-        .merge(FileExtension::Pdf)
-        .archive(FileExtension::Zip)
-        .command("imagemagick", "convert", "$input $output")
-        .pdf_a()
-        .pdf_x()
-        .pdf_ocr()
-        .pdf_encrypt()
-        .pdf_decrypt()
-        .pdf_split_pages()
-        .pdf_extract_pages()
-        .pdf_rotate_pages()
-        .export_url()
-        .export_s3("target-bucket", "eu-central-1", "access-id", "secret-key")
-        .export_azure_blob("storage-account", "documents")
+        .thumbnail(FileExtension::Jpg)?
+        .metadata()?
+        .metadata_write()?
+        .merge(FileExtension::Pdf)?
+        .archive(FileExtension::Zip)?
+        .command("imagemagick", "convert", "$input $output")?
+        .pdf_a()?
+        .pdf_x()?
+        .pdf_ocr()?
+        .pdf_encrypt()?
+        .pdf_decrypt()?
+        .pdf_split_pages()?
+        .pdf_extract_pages()?
+        .pdf_rotate_pages()?
+        .export_url()?
+        .export_s3("target-bucket", "eu-central-1", "access-id", "secret-key")?
+        .export_azure_blob("storage-account", "documents")?
         .export_google_cloud_storage(
             "project-id",
             "target-bucket",
             "client@example.test",
             "private-key",
-        )
+        )?
         .export_openstack(
             "https://openstack.example.test/auth",
             "username",
             "password",
             "region-one",
             "documents",
-        )
-        .export_sftp("sftp.example.test", "username")
-        .export_upload("https://upload.example.test/report.pdf")
+        )?
+        .export_sftp("sftp.example.test", "username")?
+        .export_upload("https://upload.example.test/report.pdf")?
         .build();
 
     let payload = serde_json::to_value(job).unwrap();
@@ -396,10 +399,11 @@ fn job_builder_covers_linear_shortcut_surface() {
     );
     assert_eq!(tasks["export-sftp"]["input"], "export-openstack");
     assert_eq!(tasks["export-upload"]["input"], "export-sftp");
+    Ok(())
 }
 
 #[test]
-fn job_builder_covers_configured_linear_shortcut_surface() {
+fn job_builder_covers_configured_linear_shortcut_surface() -> cloudconvert_sdk::Result<()> {
     let job = JobCreateRequest::linear()
         .import_url_with("https://example.test/input.docx", |task| {
             task.filename("input.docx")
@@ -442,47 +446,47 @@ fn job_builder_covers_configured_linear_shortcut_surface() {
         .convert_with(FileExtension::Pdf, |task| {
             task.input_format(FileExtension::Docx)
                 .filename("converted.pdf")
-        })
-        .optimize_with(|task| task.profile("print").quality(90))
-        .watermark_text_with("Draft", |task| task.opacity(40))
-        .watermark_image_with("logo-file", |task| task.image_width(200))
+        })?
+        .optimize_with(|task| task.profile("print").quality(90))?
+        .watermark_text_with("Draft", |task| task.opacity(40))?
+        .watermark_image_with("logo-file", |task| task.image_width(200))?
         .capture_website_with("https://example.test", FileExtension::Pdf, |task| {
             task.filename("capture.pdf")
         })
-        .thumbnail_with(FileExtension::Jpg, |task| task.dimensions(320, 180))
-        .metadata_with(|task| task.option("include_raw", true))
-        .metadata_write_with(|task| task.metadata("Author", "CloudConvert"))
-        .merge_with(FileExtension::Pdf, |task| task.filename("merged.pdf"))
-        .archive_with(FileExtension::Zip, |task| task.filename("archive.zip"))
+        .thumbnail_with(FileExtension::Jpg, |task| task.dimensions(320, 180))?
+        .metadata_with(|task| task.option("include_raw", true))?
+        .metadata_write_with(|task| task.metadata("Author", "CloudConvert"))?
+        .merge_with(FileExtension::Pdf, |task| task.filename("merged.pdf"))?
+        .archive_with(FileExtension::Zip, |task| task.filename("archive.zip"))?
         .command_with("imagemagick", "convert", "$input $output", |task| {
             task.capture_output(true)
-        })
-        .pdf_a_with(|task| task.option("level", "3b"))
-        .pdf_x_with(|task| task.option("standard", "PDF/X-4"))
-        .pdf_ocr_with(|task| task.option("language", "eng"))
-        .pdf_encrypt_with(|task| task.option("user_password", "secret"))
-        .pdf_decrypt_with(|task| task.option("password", "secret"))
-        .pdf_split_pages_with(|task| task.option("pages", "1-3"))
-        .pdf_extract_pages_with(|task| task.option("pages", "1"))
-        .pdf_rotate_pages_with(|task| task.option("angle", 90))
-        .export_url_with(|task| task.inline(false))
+        })?
+        .pdf_a_with(|task| task.option("level", "3b"))?
+        .pdf_x_with(|task| task.option("standard", "PDF/X-4"))?
+        .pdf_ocr_with(|task| task.option("language", "eng"))?
+        .pdf_encrypt_with(|task| task.option("user_password", "secret"))?
+        .pdf_decrypt_with(|task| task.option("password", "secret"))?
+        .pdf_split_pages_with(|task| task.option("pages", "1-3"))?
+        .pdf_extract_pages_with(|task| task.option("pages", "1"))?
+        .pdf_rotate_pages_with(|task| task.option("angle", 90))?
+        .export_url_with(|task| task.inline(false))?
         .export_s3_with(
             "target-bucket",
             "eu-central-1",
             "access-id",
             "secret-key",
             |task| task.key("exports/report.pdf"),
-        )
+        )?
         .export_azure_blob_with("storage-account", "documents", |task| {
             task.blob("exports/report.pdf")
-        })
+        })?
         .export_google_cloud_storage_with(
             "project-id",
             "target-bucket",
             "client@example.test",
             "private-key",
             |task| task.file("exports/report.pdf"),
-        )
+        )?
         .export_openstack_with(
             "https://openstack.example.test/auth",
             "username",
@@ -490,13 +494,13 @@ fn job_builder_covers_configured_linear_shortcut_surface() {
             "region-one",
             "documents",
             |task| task.file("exports/report.pdf"),
-        )
+        )?
         .export_sftp_with("sftp.example.test", "username", |task| {
             task.path("/exports")
-        })
+        })?
         .export_upload_with("https://upload.example.test/report.pdf", |task| {
             task.header("Authorization", "Bearer token")
-        })
+        })?
         .build();
 
     let payload = serde_json::to_value(job).unwrap();
@@ -551,6 +555,7 @@ fn job_builder_covers_configured_linear_shortcut_surface() {
         tasks["export-upload"]["headers"]["Authorization"],
         "Bearer token"
     );
+    Ok(())
 }
 
 #[test]
@@ -703,9 +708,18 @@ fn job_request_debug_redacts_extra_values() {
 }
 
 #[test]
-#[should_panic(expected = "job builder shorthand requires a previous task")]
-fn job_builder_shorthand_panics_without_previous_task() {
-    let _ = JobCreateRequest::linear().convert(FileExtension::Pdf);
+fn job_builder_shorthand_reports_typed_error_without_previous_task() {
+    let error = JobCreateRequest::linear()
+        .convert(FileExtension::Pdf)
+        .unwrap_err();
+
+    let cloudconvert_sdk::Error::InvalidBuilderState(state) = error else {
+        panic!("expected invalid builder state error");
+    };
+
+    assert_eq!(state.kind, InvalidBuilderStateKind::MissingPreviousTask);
+    assert_eq!(state.builder, "JobBuilder");
+    assert_eq!(state.method, "convert");
 }
 
 #[test]
@@ -963,15 +977,16 @@ fn upload_readiness_helpers_require_import_upload_form() {
 }
 
 #[test]
-fn job_builder_task_shorthands_update_inputs_after_explicit_tasks() {
+fn job_builder_task_shorthands_update_inputs_after_explicit_tasks() -> cloudconvert_sdk::Result<()>
+{
     let job = JobCreateRequest::builder()
         .task(
             "uploaded-source",
             ImportUrlTask::new("https://example.test/input.txt"),
         )
-        .convert_with_input_format(FileExtension::Txt, FileExtension::Pdf)
-        .pdf_a()
-        .export_url()
+        .convert_with_input_format(FileExtension::Txt, FileExtension::Pdf)?
+        .pdf_a()?
+        .export_url()?
         .build();
 
     let payload = serde_json::to_value(job).unwrap();
@@ -985,6 +1000,7 @@ fn job_builder_task_shorthands_update_inputs_after_explicit_tasks() {
     assert_eq!(payload["tasks"]["pdf-a"]["operation"], "pdf/a");
     assert_eq!(payload["tasks"]["pdf-a"]["input"], "convert");
     assert_eq!(payload["tasks"]["export-url"]["input"], "pdf-a");
+    Ok(())
 }
 
 #[test]

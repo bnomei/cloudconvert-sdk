@@ -52,8 +52,8 @@ async fn main() -> cloudconvert_sdk::Result<()> {
 
     let request = JobCreateRequest::linear()
         .import_url("https://example.test/input.docx")
-        .convert(FileExtension::Pdf)
-        .export_url()
+        .convert(FileExtension::Pdf)?
+        .export_url()?
         .build();
 
     let job = client.jobs().create(request).await?;
@@ -85,28 +85,39 @@ Use `JobCreateRequest::linear()` when every task feeds into the next task:
 ```rust
 use cloudconvert_sdk::{FileExtension, JobCreateRequest};
 
-let request = JobCreateRequest::linear()
-    .import_url("https://example.test/input.docx")
-    .convert(FileExtension::Pdf)
-    .export_url()
-    .build();
+fn build_request() -> cloudconvert_sdk::Result<JobCreateRequest> {
+    let request = JobCreateRequest::linear()
+        .import_url("https://example.test/input.docx")
+        .convert(FileExtension::Pdf)?
+        .export_url()?
+        .build();
+
+    Ok(request)
+}
 ```
+
+Linear methods that infer their input from the previous task return a typed
+`Error::InvalidBuilderState` if they are called before any source task exists.
 
 Use `*_with(...)` methods when a task needs options but the job is still
 serial:
 
 ```rust
-let request = JobCreateRequest::linear()
-    .import_url_with("https://example.test/input.docx", |task| {
-        task.filename("input.docx")
-    })
-    .convert_with(FileExtension::Pdf, |task| {
-        task.input_format(FileExtension::Docx)
-            .engine("office")
-            .filename("converted.pdf")
-    })
-    .export_url_with(|task| task.inline(false))
-    .build();
+fn build_request() -> cloudconvert_sdk::Result<JobCreateRequest> {
+    let request = JobCreateRequest::linear()
+        .import_url_with("https://example.test/input.docx", |task| {
+            task.filename("input.docx")
+        })
+        .convert_with(FileExtension::Pdf, |task| {
+            task.input_format(FileExtension::Docx)
+                .engine("office")
+                .filename("converted.pdf")
+        })?
+        .export_url_with(|task| task.inline(false))?
+        .build();
+
+    Ok(request)
+}
 ```
 
 ### Graph Jobs
@@ -211,8 +222,8 @@ async fn run() -> cloudconvert_sdk::Result<()> {
         .import_upload()
         .convert_with(FileExtension::Pdf, |task| {
             task.input_format(FileExtension::Txt)
-        })
-        .export_url()
+        })?
+        .export_url()?
         .build();
 
     let job = client.jobs().create(request).await?;
@@ -329,6 +340,43 @@ async fn validate(client: cloudconvert_sdk::CloudConvertClient) -> cloudconvert_
 Use `option(...)` builder methods, `extra` maps, or `TaskRequest::custom(...)`
 for operation-specific options that are not yet typed by this SDK.
 
+### Recorded Metadata Fixtures
+
+Normal CI parses committed fixtures from `tests/fixtures/cloudconvert/` and does
+not require CloudConvert credentials. Refresh those fixtures only when you want
+to intentionally review upstream metadata drift.
+
+```sh
+export CLOUDCONVERT_API_KEY=...
+
+curl --get "https://api.cloudconvert.com/v2/operations" \
+  --header "Authorization: Bearer ${CLOUDCONVERT_API_KEY}" \
+  --data-urlencode "filter[operation]=convert" \
+  --data-urlencode "filter[input_format]=docx" \
+  --data-urlencode "filter[output_format]=pdf" \
+  --data-urlencode "include=options,engine_versions" \
+  --data-urlencode "alternatives=true" \
+  --output tests/fixtures/cloudconvert/operations-convert-docx-pdf.json
+
+curl --get "https://api.cloudconvert.com/v2/operations" \
+  --header "Authorization: Bearer ${CLOUDCONVERT_API_KEY}" \
+  --data-urlencode "filter[operation]=metadata" \
+  --data-urlencode "filter[input_format]=pdf" \
+  --data-urlencode "include=options,engine_versions" \
+  --output tests/fixtures/cloudconvert/operations-metadata.json
+
+curl --get "https://api.cloudconvert.com/v2/operations" \
+  --header "Authorization: Bearer ${CLOUDCONVERT_API_KEY}" \
+  --data-urlencode "filter[operation]=metadata/write" \
+  --data-urlencode "filter[input_format]=pdf" \
+  --data-urlencode "include=options,engine_versions" \
+  --output tests/fixtures/cloudconvert/operations-metadata-write.json
+```
+
+Review fixture diffs before committing them. If the response shape changed,
+update `tests/metadata_contract.rs` with an assertion for the new contract
+instead of weakening existing checks.
+
 ## Retry
 
 Automatic retry is off by default. Enable the optional feature and set a policy:
@@ -377,8 +425,8 @@ async fn run() -> cloudconvert_sdk::Result<()> {
     let client = CloudConvertClient::builder(ApiKey::from_env()?).build()?;
     let request = JobCreateRequest::linear()
         .import_url("https://example.test/input.docx")
-        .convert(FileExtension::Pdf)
-        .export_url()
+        .convert(FileExtension::Pdf)?
+        .export_url()?
         .build();
 
     let finished = client.jobs().create_and_wait_socket(request).await?;

@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, convert::identity, fmt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::error::InvalidBuilderState;
 use crate::tasks::{
     ArchiveTask, AzureBlobExportTask, AzureBlobImportTask, Base64ImportTask, CaptureWebsiteTask,
     CommandTask, ConvertTask, ExportUploadTask, ExportUrlTask, GoogleCloudStorageExportTask,
@@ -112,14 +113,17 @@ pub struct ApiResponse<T> {
 /// ```
 /// use cloudconvert_sdk::{FileExtension, JobCreateRequest};
 ///
+/// # fn main() -> cloudconvert_sdk::Result<()> {
 /// let request = JobCreateRequest::linear()
 ///     .import_url("https://example.test/input.docx")
-///     .convert(FileExtension::Pdf)
-///     .export_url()
+///     .convert(FileExtension::Pdf)?
+///     .export_url()?
 ///     .build();
 ///
 /// let payload = serde_json::to_value(request).unwrap();
 /// assert_eq!(payload["tasks"]["convert"]["input"], "import-url");
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Default, Serialize)]
 pub struct JobCreateRequest {
@@ -301,14 +305,17 @@ impl fmt::Debug for JobCreateRequest {
 /// ```
 /// use cloudconvert_sdk::{FileExtension, JobCreateRequest};
 ///
+/// # fn main() -> cloudconvert_sdk::Result<()> {
 /// let request = JobCreateRequest::linear()
 ///     .import_url("https://example.test/input.docx")
-///     .convert(FileExtension::Pdf)
-///     .export_url()
+///     .convert(FileExtension::Pdf)?
+///     .export_url()?
 ///     .build();
 ///
 /// let payload = serde_json::to_value(request).unwrap();
 /// assert_eq!(payload["tasks"]["export-url"]["input"], "convert");
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// Use `*_with(...)` methods when a task needs options. Use
@@ -322,18 +329,18 @@ pub struct JobBuilder {
 macro_rules! linear_pdf_task_methods {
     ($method:ident, $with_method:ident, $task_type:ident) => {
         /// Appends a PDF operation task using the previous task as input.
-        pub fn $method(self) -> Self {
-            let input = self.previous_input();
-            self.append_task(TaskRequest::$method(input))
+        pub fn $method(self) -> crate::Result<Self> {
+            let input = self.previous_input(stringify!($method))?;
+            Ok(self.append_task(TaskRequest::$method(input)))
         }
 
         /// Appends and configures a PDF operation task using the previous task as input.
-        pub fn $with_method<F>(self, configure: F) -> Self
+        pub fn $with_method<F>(self, configure: F) -> crate::Result<Self>
         where
             F: FnOnce($task_type) -> $task_type,
         {
-            let input = self.previous_input();
-            self.append_configured_task($task_type::new(input), configure)
+            let input = self.previous_input(stringify!($with_method))?;
+            Ok(self.append_configured_task($task_type::new(input), configure))
         }
     };
 }
@@ -517,9 +524,9 @@ impl JobBuilder {
     }
 
     /// Appends a `convert` task using the previous task as input.
-    pub fn convert(self, output_format: impl Into<String>) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::convert(input, output_format))
+    pub fn convert(self, output_format: impl Into<String>) -> crate::Result<Self> {
+        let input = self.previous_input("convert")?;
+        Ok(self.append_task(TaskRequest::convert(input, output_format)))
     }
 
     /// Appends a `convert` task with an explicit input format.
@@ -527,32 +534,36 @@ impl JobBuilder {
         self,
         input_format: impl Into<String>,
         output_format: impl Into<String>,
-    ) -> Self {
-        let input = self.previous_input();
-        self.append_task(ConvertTask::new(input, output_format).input_format(input_format))
+    ) -> crate::Result<Self> {
+        let input = self.previous_input("convert_with_input_format")?;
+        Ok(self.append_task(ConvertTask::new(input, output_format).input_format(input_format)))
     }
 
     /// Appends an `optimize` task using the previous task as input.
-    pub fn optimize(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::optimize(input))
+    pub fn optimize(self) -> crate::Result<Self> {
+        let input = self.previous_input("optimize")?;
+        Ok(self.append_task(TaskRequest::optimize(input)))
     }
 
     /// Appends a text `watermark` task using the previous task as input.
-    pub fn watermark_text(self, text: impl Into<String>) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::watermark(crate::tasks::WatermarkTask::text(
-            input, text,
-        )))
+    pub fn watermark_text(self, text: impl Into<String>) -> crate::Result<Self> {
+        let input = self.previous_input("watermark_text")?;
+        Ok(
+            self.append_task(TaskRequest::watermark(crate::tasks::WatermarkTask::text(
+                input, text,
+            ))),
+        )
     }
 
     /// Appends an image `watermark` task using the previous task as input.
-    pub fn watermark_image(self, image_task_name: impl Into<String>) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::watermark(crate::tasks::WatermarkTask::image(
-            input,
-            image_task_name,
-        )))
+    pub fn watermark_image(self, image_task_name: impl Into<String>) -> crate::Result<Self> {
+        let input = self.previous_input("watermark_image")?;
+        Ok(
+            self.append_task(TaskRequest::watermark(crate::tasks::WatermarkTask::image(
+                input,
+                image_task_name,
+            ))),
+        )
     }
 
     /// Appends a `capture-website` task.
@@ -561,33 +572,33 @@ impl JobBuilder {
     }
 
     /// Appends a `thumbnail` task using the previous task as input.
-    pub fn thumbnail(self, output_format: impl Into<String>) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::thumbnail(input, output_format))
+    pub fn thumbnail(self, output_format: impl Into<String>) -> crate::Result<Self> {
+        let input = self.previous_input("thumbnail")?;
+        Ok(self.append_task(TaskRequest::thumbnail(input, output_format)))
     }
 
     /// Appends a `metadata` task using the previous task as input.
-    pub fn metadata(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::metadata(input))
+    pub fn metadata(self) -> crate::Result<Self> {
+        let input = self.previous_input("metadata")?;
+        Ok(self.append_task(TaskRequest::metadata(input)))
     }
 
     /// Appends a `metadata/write` task using the previous task as input.
-    pub fn metadata_write(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::metadata_write(input))
+    pub fn metadata_write(self) -> crate::Result<Self> {
+        let input = self.previous_input("metadata_write")?;
+        Ok(self.append_task(TaskRequest::metadata_write(input)))
     }
 
     /// Appends a `merge` task using the previous task as input.
-    pub fn merge(self, output_format: impl Into<String>) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::merge(input, output_format))
+    pub fn merge(self, output_format: impl Into<String>) -> crate::Result<Self> {
+        let input = self.previous_input("merge")?;
+        Ok(self.append_task(TaskRequest::merge(input, output_format)))
     }
 
     /// Appends an `archive` task using the previous task as input.
-    pub fn archive(self, output_format: impl Into<String>) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::archive(input, output_format))
+    pub fn archive(self, output_format: impl Into<String>) -> crate::Result<Self> {
+        let input = self.previous_input("archive")?;
+        Ok(self.append_task(TaskRequest::archive(input, output_format)))
     }
 
     /// Appends a `command` task using the previous task as input.
@@ -596,9 +607,9 @@ impl JobBuilder {
         engine: impl Into<String>,
         command: impl Into<String>,
         arguments: impl Into<String>,
-    ) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::command(input, engine, command, arguments))
+    ) -> crate::Result<Self> {
+        let input = self.previous_input("command")?;
+        Ok(self.append_task(TaskRequest::command(input, engine, command, arguments)))
     }
 
     linear_pdf_task_methods!(pdf_a, pdf_a_with, PdfATask);
@@ -615,9 +626,9 @@ impl JobBuilder {
     linear_pdf_task_methods!(pdf_rotate_pages, pdf_rotate_pages_with, PdfRotatePagesTask);
 
     /// Appends an `export/url` task using the previous task as input.
-    pub fn export_url(self) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::export_url(input))
+    pub fn export_url(self) -> crate::Result<Self> {
+        let input = self.previous_input("export_url")?;
+        Ok(self.append_task(TaskRequest::export_url(input)))
     }
 
     /// Appends an `export/s3` task using the previous task as input.
@@ -627,15 +638,15 @@ impl JobBuilder {
         region: impl Into<String>,
         access_key_id: impl Into<String>,
         secret_access_key: impl Into<String>,
-    ) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::export_s3(
+    ) -> crate::Result<Self> {
+        let input = self.previous_input("export_s3")?;
+        Ok(self.append_task(TaskRequest::export_s3(
             input,
             bucket,
             region,
             access_key_id,
             secret_access_key,
-        ))
+        )))
     }
 
     /// Appends an `export/azure/blob` task using the previous task as input.
@@ -643,13 +654,13 @@ impl JobBuilder {
         self,
         storage_account: impl Into<String>,
         container: impl Into<String>,
-    ) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::export_azure_blob(
+    ) -> crate::Result<Self> {
+        let input = self.previous_input("export_azure_blob")?;
+        Ok(self.append_task(TaskRequest::export_azure_blob(
             input,
             storage_account,
             container,
-        ))
+        )))
     }
 
     /// Appends an `export/google-cloud-storage` task using the previous task as input.
@@ -659,15 +670,15 @@ impl JobBuilder {
         bucket: impl Into<String>,
         client_email: impl Into<String>,
         private_key: impl Into<String>,
-    ) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::export_google_cloud_storage(
+    ) -> crate::Result<Self> {
+        let input = self.previous_input("export_google_cloud_storage")?;
+        Ok(self.append_task(TaskRequest::export_google_cloud_storage(
             input,
             project_id,
             bucket,
             client_email,
             private_key,
-        ))
+        )))
     }
 
     /// Appends an `export/openstack` task using the previous task as input.
@@ -678,23 +689,27 @@ impl JobBuilder {
         password: impl Into<String>,
         region: impl Into<String>,
         container: impl Into<String>,
-    ) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::export_openstack(
+    ) -> crate::Result<Self> {
+        let input = self.previous_input("export_openstack")?;
+        Ok(self.append_task(TaskRequest::export_openstack(
             input, auth_url, username, password, region, container,
-        ))
+        )))
     }
 
     /// Appends an `export/sftp` task using the previous task as input.
-    pub fn export_sftp(self, host: impl Into<String>, username: impl Into<String>) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::export_sftp(input, host, username))
+    pub fn export_sftp(
+        self,
+        host: impl Into<String>,
+        username: impl Into<String>,
+    ) -> crate::Result<Self> {
+        let input = self.previous_input("export_sftp")?;
+        Ok(self.append_task(TaskRequest::export_sftp(input, host, username)))
     }
 
     /// Appends an `export/upload` task using the previous task as input.
-    pub fn export_upload(self, url: impl Into<String>) -> Self {
-        let input = self.previous_input();
-        self.append_task(TaskRequest::export_upload(input, url))
+    pub fn export_upload(self, url: impl Into<String>) -> crate::Result<Self> {
+        let input = self.previous_input("export_upload")?;
+        Ok(self.append_task(TaskRequest::export_upload(input, url)))
     }
 
     /// Appends and configures an `import/url` task.
@@ -798,39 +813,51 @@ impl JobBuilder {
     }
 
     /// Appends and configures a `convert` task using the previous task as input.
-    pub fn convert_with<F>(self, output_format: impl Into<String>, configure: F) -> Self
+    pub fn convert_with<F>(
+        self,
+        output_format: impl Into<String>,
+        configure: F,
+    ) -> crate::Result<Self>
     where
         F: FnOnce(ConvertTask) -> ConvertTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(ConvertTask::new(input, output_format), configure)
+        let input = self.previous_input("convert_with")?;
+        Ok(self.append_configured_task(ConvertTask::new(input, output_format), configure))
     }
 
     /// Appends and configures an `optimize` task using the previous task as input.
-    pub fn optimize_with<F>(self, configure: F) -> Self
+    pub fn optimize_with<F>(self, configure: F) -> crate::Result<Self>
     where
         F: FnOnce(OptimizeTask) -> OptimizeTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(OptimizeTask::new(input), configure)
+        let input = self.previous_input("optimize_with")?;
+        Ok(self.append_configured_task(OptimizeTask::new(input), configure))
     }
 
     /// Appends and configures a text `watermark` task using the previous task as input.
-    pub fn watermark_text_with<F>(self, text: impl Into<String>, configure: F) -> Self
+    pub fn watermark_text_with<F>(
+        self,
+        text: impl Into<String>,
+        configure: F,
+    ) -> crate::Result<Self>
     where
         F: FnOnce(WatermarkTask) -> WatermarkTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(WatermarkTask::text(input, text), configure)
+        let input = self.previous_input("watermark_text_with")?;
+        Ok(self.append_configured_task(WatermarkTask::text(input, text), configure))
     }
 
     /// Appends and configures an image `watermark` task using the previous task as input.
-    pub fn watermark_image_with<F>(self, image_task_name: impl Into<String>, configure: F) -> Self
+    pub fn watermark_image_with<F>(
+        self,
+        image_task_name: impl Into<String>,
+        configure: F,
+    ) -> crate::Result<Self>
     where
         F: FnOnce(WatermarkTask) -> WatermarkTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(WatermarkTask::image(input, image_task_name), configure)
+        let input = self.previous_input("watermark_image_with")?;
+        Ok(self.append_configured_task(WatermarkTask::image(input, image_task_name), configure))
     }
 
     /// Appends and configures a `capture-website` task.
@@ -847,48 +874,60 @@ impl JobBuilder {
     }
 
     /// Appends and configures a `thumbnail` task using the previous task as input.
-    pub fn thumbnail_with<F>(self, output_format: impl Into<String>, configure: F) -> Self
+    pub fn thumbnail_with<F>(
+        self,
+        output_format: impl Into<String>,
+        configure: F,
+    ) -> crate::Result<Self>
     where
         F: FnOnce(ThumbnailTask) -> ThumbnailTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(ThumbnailTask::new(input, output_format), configure)
+        let input = self.previous_input("thumbnail_with")?;
+        Ok(self.append_configured_task(ThumbnailTask::new(input, output_format), configure))
     }
 
     /// Appends and configures a `metadata` task using the previous task as input.
-    pub fn metadata_with<F>(self, configure: F) -> Self
+    pub fn metadata_with<F>(self, configure: F) -> crate::Result<Self>
     where
         F: FnOnce(MetadataTask) -> MetadataTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(MetadataTask::new(input), configure)
+        let input = self.previous_input("metadata_with")?;
+        Ok(self.append_configured_task(MetadataTask::new(input), configure))
     }
 
     /// Appends and configures a `metadata/write` task using the previous task as input.
-    pub fn metadata_write_with<F>(self, configure: F) -> Self
+    pub fn metadata_write_with<F>(self, configure: F) -> crate::Result<Self>
     where
         F: FnOnce(MetadataWriteTask) -> MetadataWriteTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(MetadataWriteTask::new(input), configure)
+        let input = self.previous_input("metadata_write_with")?;
+        Ok(self.append_configured_task(MetadataWriteTask::new(input), configure))
     }
 
     /// Appends and configures a `merge` task using the previous task as input.
-    pub fn merge_with<F>(self, output_format: impl Into<String>, configure: F) -> Self
+    pub fn merge_with<F>(
+        self,
+        output_format: impl Into<String>,
+        configure: F,
+    ) -> crate::Result<Self>
     where
         F: FnOnce(MergeTask) -> MergeTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(MergeTask::new(input, output_format), configure)
+        let input = self.previous_input("merge_with")?;
+        Ok(self.append_configured_task(MergeTask::new(input, output_format), configure))
     }
 
     /// Appends and configures an `archive` task using the previous task as input.
-    pub fn archive_with<F>(self, output_format: impl Into<String>, configure: F) -> Self
+    pub fn archive_with<F>(
+        self,
+        output_format: impl Into<String>,
+        configure: F,
+    ) -> crate::Result<Self>
     where
         F: FnOnce(ArchiveTask) -> ArchiveTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(ArchiveTask::new(input, output_format), configure)
+        let input = self.previous_input("archive_with")?;
+        Ok(self.append_configured_task(ArchiveTask::new(input, output_format), configure))
     }
 
     /// Appends and configures a `command` task using the previous task as input.
@@ -898,24 +937,24 @@ impl JobBuilder {
         command: impl Into<String>,
         arguments: impl Into<String>,
         configure: F,
-    ) -> Self
+    ) -> crate::Result<Self>
     where
         F: FnOnce(CommandTask) -> CommandTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(
+        let input = self.previous_input("command_with")?;
+        Ok(self.append_configured_task(
             CommandTask::new(input, engine, command, arguments),
             configure,
-        )
+        ))
     }
 
     /// Appends and configures an `export/url` task using the previous task as input.
-    pub fn export_url_with<F>(self, configure: F) -> Self
+    pub fn export_url_with<F>(self, configure: F) -> crate::Result<Self>
     where
         F: FnOnce(ExportUrlTask) -> ExportUrlTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(ExportUrlTask::new(input), configure)
+        let input = self.previous_input("export_url_with")?;
+        Ok(self.append_configured_task(ExportUrlTask::new(input), configure))
     }
 
     /// Appends and configures an `export/s3` task using the previous task as input.
@@ -926,15 +965,15 @@ impl JobBuilder {
         access_key_id: impl Into<String>,
         secret_access_key: impl Into<String>,
         configure: F,
-    ) -> Self
+    ) -> crate::Result<Self>
     where
         F: FnOnce(S3ExportTask) -> S3ExportTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(
+        let input = self.previous_input("export_s3_with")?;
+        Ok(self.append_configured_task(
             S3ExportTask::new(input, bucket, region, access_key_id, secret_access_key),
             configure,
-        )
+        ))
     }
 
     /// Appends and configures an `export/azure/blob` task using the previous task as input.
@@ -943,15 +982,15 @@ impl JobBuilder {
         storage_account: impl Into<String>,
         container: impl Into<String>,
         configure: F,
-    ) -> Self
+    ) -> crate::Result<Self>
     where
         F: FnOnce(AzureBlobExportTask) -> AzureBlobExportTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(
+        let input = self.previous_input("export_azure_blob_with")?;
+        Ok(self.append_configured_task(
             AzureBlobExportTask::new(input, storage_account, container),
             configure,
-        )
+        ))
     }
 
     /// Appends and configures an `export/google-cloud-storage` task using the previous task as input.
@@ -962,15 +1001,15 @@ impl JobBuilder {
         client_email: impl Into<String>,
         private_key: impl Into<String>,
         configure: F,
-    ) -> Self
+    ) -> crate::Result<Self>
     where
         F: FnOnce(GoogleCloudStorageExportTask) -> GoogleCloudStorageExportTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(
+        let input = self.previous_input("export_google_cloud_storage_with")?;
+        Ok(self.append_configured_task(
             GoogleCloudStorageExportTask::new(input, project_id, bucket, client_email, private_key),
             configure,
-        )
+        ))
     }
 
     /// Appends and configures an `export/openstack` task using the previous task as input.
@@ -982,15 +1021,15 @@ impl JobBuilder {
         region: impl Into<String>,
         container: impl Into<String>,
         configure: F,
-    ) -> Self
+    ) -> crate::Result<Self>
     where
         F: FnOnce(OpenStackExportTask) -> OpenStackExportTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(
+        let input = self.previous_input("export_openstack_with")?;
+        Ok(self.append_configured_task(
             OpenStackExportTask::new(input, auth_url, username, password, region, container),
             configure,
-        )
+        ))
     }
 
     /// Appends and configures an `export/sftp` task using the previous task as input.
@@ -999,21 +1038,21 @@ impl JobBuilder {
         host: impl Into<String>,
         username: impl Into<String>,
         configure: F,
-    ) -> Self
+    ) -> crate::Result<Self>
     where
         F: FnOnce(SftpExportTask) -> SftpExportTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(SftpExportTask::new(input, host, username), configure)
+        let input = self.previous_input("export_sftp_with")?;
+        Ok(self.append_configured_task(SftpExportTask::new(input, host, username), configure))
     }
 
     /// Appends and configures an `export/upload` task using the previous task as input.
-    pub fn export_upload_with<F>(self, url: impl Into<String>, configure: F) -> Self
+    pub fn export_upload_with<F>(self, url: impl Into<String>, configure: F) -> crate::Result<Self>
     where
         F: FnOnce(ExportUploadTask) -> ExportUploadTask,
     {
-        let input = self.previous_input();
-        self.append_configured_task(ExportUploadTask::new(input, url), configure)
+        let input = self.previous_input("export_upload_with")?;
+        Ok(self.append_configured_task(ExportUploadTask::new(input, url), configure))
     }
 
     /// Finishes the builder and returns the job creation request.
@@ -1034,12 +1073,11 @@ impl JobBuilder {
         self.append_task(configure(task))
     }
 
-    fn previous_input(&self) -> Input {
-        Input::from(
-            self.last_task
-                .as_ref()
-                .expect("job builder shorthand requires a previous task"),
-        )
+    fn previous_input(&self, method: &'static str) -> crate::Result<Input> {
+        self.last_task
+            .as_ref()
+            .map(Input::from)
+            .ok_or_else(|| InvalidBuilderState::missing_previous_task(method).into())
     }
 }
 

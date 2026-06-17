@@ -1,0 +1,74 @@
+{
+  "data": [
+    {
+      "operation": "convert",
+      "input_format": "docx",
+      "output_format": "pdf",
+      "engine": "office",
+      "engine_version": "2019",
+      "credits": 1,
+      "options": {
+        "input_format": {
+          "type": "string",
+          "required": false,
+          "default": "docx",
+          "label": "Input format"
+        },
+        "output_format": {
+          "type": "string",
+          "required": true,
+          "default": "pdf",
+          "label": "Output format"
+        },
+        "filename": {
+          "type": "string",
+          "required": false
+        },
+        "pdf_a": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      },
+      "engine_versions": [
+        "2016",
+        {
+          "version": "2019",
+          "default": true,
+          "latest": true,
+          "deprecated": false
+        }
+      ],
+      "alternatives": [
+        {
+          "operation": "convert",
+          "input_format": "docx",
+          "output_format": "pdf",
+          "engine": "libreoffice",
+          "credits": 1,
+          "engine_versions": ["7.6"],
+          "options": []
+        }
+      ],
+      "deprecated": false,
+      "meta": {
+        "category": "document"
+      }
+    }
+  ],
+  "links": {
+    "first": "https://api.cloudconvert.com/v2/operations?page=1",
+    "last": "https://api.cloudconvert.com/v2/operations?page=1",
+    "prev": null,
+    "next": null
+  },
+  "meta": {
+    "current_page": 1,
+    "from": 1,
+    "path": "https://api.cloudconvert.com/v2/operations",
+    "per_page": 100,
+    "to": 1,
+    "total": 1,
+    "last_page": 1
+  }
+}

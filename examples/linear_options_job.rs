@@ -11,13 +11,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             task.input_format(FileExtension::Docx)
                 .engine("office")
                 .filename("converted.pdf")
-        })
+        })?
         .optimize_with(|task| {
             task.input_format(FileExtension::Pdf)
                 .profile("print")
                 .filename("converted-optimized.pdf")
-        })
-        .export_url_with(|task| task.inline(false))
+        })?
+        .export_url_with(|task| task.inline(false))?
         .build();
 
     println!("{}", serde_json::to_string_pretty(&request)?);
