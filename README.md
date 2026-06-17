@@ -25,7 +25,7 @@ regions, sandbox usage, and operation-specific options, use the
 
 ```toml
 [dependencies]
-cloudconvert-sdk = "0.1"
+cloudconvert-sdk = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -382,7 +382,7 @@ instead of weakening existing checks.
 Automatic retry is off by default. Enable the optional feature and set a policy:
 
 ```toml
-cloudconvert-sdk = { version = "0.1", features = ["retry"] }
+cloudconvert-sdk = { version = "0.2", features = ["retry"] }
 ```
 
 ```rust
@@ -415,7 +415,7 @@ Enable the optional feature when an async application wants lower-latency
 completion than polling and does not expose a public webhook receiver:
 
 ```toml
-cloudconvert-sdk = { version = "0.1", features = ["socket"] }
+cloudconvert-sdk = { version = "0.2", features = ["socket"] }
 ```
 
 ```rust
