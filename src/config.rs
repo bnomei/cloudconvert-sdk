@@ -422,14 +422,17 @@ impl ClientBuilder {
     }
 
     pub fn build(self) -> Result<crate::CloudConvertClient> {
-        let api_base_url = match self.api_base_url {
+        // Normalize a trailing slash so `base.join("jobs")` keeps the configured
+        // path root (e.g. `/v2/`); without it RFC 3986 join would drop the last
+        // segment of a custom base like `https://api.example.com/v2`.
+        let api_base_url = ensure_trailing_slash(match self.api_base_url {
             Some(url) => url,
             None => default_api_url(self.sandbox, self.region.as_ref())?,
-        };
-        let sync_base_url = match self.sync_base_url {
+        });
+        let sync_base_url = ensure_trailing_slash(match self.sync_base_url {
             Some(url) => url,
             None => default_sync_url(self.sandbox, self.region.as_ref())?,
-        };
+        });
 
         let config = CloudConvertConfig {
             credential: self.credential,
@@ -496,6 +499,14 @@ fn http_client_builder(transport_config: Option<&TransportConfig>) -> reqwest::C
     }
 
     builder
+}
+
+fn ensure_trailing_slash(mut url: Url) -> Url {
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    url
 }
 
 fn default_api_url(sandbox: bool, region: Option<&Region>) -> Result<Url> {
