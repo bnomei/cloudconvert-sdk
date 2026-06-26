@@ -1,3 +1,10 @@
+//! Typed CloudConvert task request builders and serialization helpers.
+//!
+//! Each `*Task` struct implements [`TaskPayload`] for one CloudConvert operation.
+//! Use [`TaskRequest`] factory methods, job builders in [`crate::JobCreateRequest`],
+//! or [`TaskRequest::custom`] when an operation is not yet typed by this crate.
+//! Per-task options can also flow through `option(...)` builders and `extra` maps.
+
 use std::{collections::BTreeMap, fmt};
 
 use serde::{Serialize, Serializer};
@@ -5,6 +12,7 @@ use serde_json::{Map, Value};
 
 use crate::file_extension::normalize_file_extension;
 
+/// Open-ended operation options serialized beside typed task fields.
 pub type ExtraOptions = BTreeMap<String, Value>;
 
 /// Input dependency for a CloudConvert task.
@@ -840,9 +848,6 @@ task_payload!(SftpImportTask, "import/sftp");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ConvertTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -908,9 +913,6 @@ task_payload!(ConvertTask, "convert");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct OptimizeTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -1025,9 +1027,6 @@ pub enum FontAlign {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WatermarkTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -1245,9 +1244,6 @@ task_payload!(WatermarkTask, "watermark");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CaptureWebsiteTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     url: String,
@@ -1305,9 +1301,6 @@ task_payload!(CaptureWebsiteTask, "capture-website");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ThumbnailTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -1419,9 +1412,6 @@ task_payload!(ThumbnailTask, "thumbnail");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct MetadataTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -1477,9 +1467,6 @@ task_payload!(MetadataTask, "metadata");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct MetadataWriteTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -1555,9 +1542,6 @@ task_payload!(MetadataWriteTask, "metadata/write");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct MergeTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -1615,9 +1599,6 @@ task_payload!(MergeTask, "merge");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ArchiveTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -1675,9 +1656,6 @@ task_payload!(ArchiveTask, "archive");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CommandTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -1738,9 +1716,6 @@ macro_rules! pdf_task {
     ($type:ident, $operation:literal) => {
         #[derive(Clone, Debug, Serialize)]
         pub struct $type {
-            // Flattened extras MUST stay the first field: serde emits fields in
-            // declaration order and serde_json keeps the last write on a key, so
-            // canonical fields below win over any colliding option() key.
             #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
             extra: ExtraOptions,
             input: Input,
@@ -1838,9 +1813,6 @@ task_payload!(ExportUrlTask, "export/url");
 
 #[derive(Clone, Serialize)]
 pub struct S3ExportTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -1940,9 +1912,6 @@ task_payload!(S3ExportTask, "export/s3");
 
 #[derive(Clone, Serialize)]
 pub struct AzureBlobExportTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -2011,9 +1980,6 @@ task_payload!(AzureBlobExportTask, "export/azure/blob");
 
 #[derive(Clone, Serialize)]
 pub struct GoogleCloudStorageExportTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -2067,9 +2033,6 @@ task_payload!(GoogleCloudStorageExportTask, "export/google-cloud-storage");
 
 #[derive(Clone, Serialize)]
 pub struct OpenStackExportTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -2126,9 +2089,6 @@ task_payload!(OpenStackExportTask, "export/openstack");
 
 #[derive(Clone, Serialize)]
 pub struct SftpExportTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,
@@ -2200,9 +2160,6 @@ task_payload!(SftpExportTask, "export/sftp");
 
 #[derive(Clone, Serialize)]
 pub struct ExportUploadTask {
-    // Flattened extras MUST stay the first field: serde emits fields in
-    // declaration order and serde_json keeps the last write on a key, so
-    // canonical fields below win over any colliding option() key.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: ExtraOptions,
     input: Input,

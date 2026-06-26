@@ -1,3 +1,12 @@
+//! Async HTTP client and resource facades for CloudConvert API v2.
+//!
+//! [`CloudConvertClient`] owns bearer authentication, optional retry policy,
+//! and two HTTP clients: one that follows redirects for ordinary API traffic
+//! and one that preserves `Location` headers for sync redirect endpoints.
+//! Resource types such as [`JobsResource`] group REST calls by domain. File
+//! transfer helpers upload multipart data to import tasks and stream downloads
+//! from export URLs outside the API base URL.
+
 #[cfg(feature = "retry")]
 use std::time::Duration;
 use std::{
@@ -37,18 +46,22 @@ use crate::{
 #[cfg(feature = "socket")]
 use crate::socket::CloudConvertSocket;
 
+/// Entry point for authenticated CloudConvert API calls and file transfer.
 #[derive(Clone, Debug)]
 pub struct CloudConvertClient {
     config: Arc<CloudConvertConfig>,
     http: reqwest::Client,
+    // Preserves redirect Location headers for sync wait and redirect URL endpoints.
     redirectless_http: reqwest::Client,
 }
 
 impl CloudConvertClient {
+    /// Starts a client builder authenticated with an API key.
     pub fn builder(api_key: ApiKey) -> ClientBuilder {
         ClientBuilder::new(api_key)
     }
 
+    /// Starts a client builder authenticated with an OAuth access token.
     pub fn builder_with_access_token(access_token: OAuthAccessToken) -> ClientBuilder {
         ClientBuilder::new_with_access_token(access_token)
     }
@@ -65,48 +78,59 @@ impl CloudConvertClient {
         })
     }
 
+    /// Returns the resolved client configuration, including base URLs and region.
     pub fn config(&self) -> &CloudConvertConfig {
         &self.config
     }
 
+    /// Job lifecycle endpoints: create, wait, list, and delete.
     pub fn jobs(&self) -> JobsResource {
         JobsResource {
             client: self.clone(),
         }
     }
 
+    /// Standalone task endpoints outside a job graph.
     pub fn tasks(&self) -> TasksResource {
         TasksResource {
             client: self.clone(),
         }
     }
 
+    /// Account endpoints and user-scoped Socket.IO subscriptions.
     pub fn users(&self) -> UsersResource {
         UsersResource {
             client: self.clone(),
         }
     }
 
+    /// Webhook registration and listing for the authenticated account.
     pub fn webhooks(&self) -> WebhooksResource {
         WebhooksResource {
             client: self.clone(),
         }
     }
 
+    /// CloudConvert operations metadata used to discover engines and options.
     pub fn operations(&self) -> OperationsResource {
         OperationsResource {
             client: self.clone(),
         }
     }
 
+    /// Socket.IO base URL for the client's sandbox or production environment.
     pub fn socket_base_url(&self) -> &'static str {
         crate::socket::socket_base_url(self.config.sandbox())
     }
 
+    /// Builds a bearer-authenticated subscription payload for a Socket.IO channel.
     pub fn socket_subscription(&self, channel: SocketChannel) -> SocketSubscription {
         SocketSubscription::new(channel.name().into_owned(), self.config.credential.expose())
     }
 
+    /// Connects to Socket.IO and subscribes to the given channels.
+    ///
+    /// Requires the `socket` crate feature.
     #[cfg(feature = "socket")]
     pub async fn socket(
         &self,
@@ -130,6 +154,7 @@ impl CloudConvertClient {
         CloudConvertSocket::connect_with_buffer(self.socket_base_url(), subscriptions, buffer).await
     }
 
+    /// Downloads a URL, typically an export file link, into memory.
     pub async fn download(&self, url: impl AsRef<str>) -> Result<Bytes> {
         let response = self.http.get(url.as_ref()).send().await?;
         Self::ensure_success(response)
@@ -139,6 +164,7 @@ impl CloudConvertClient {
             .map_err(Error::Http)
     }
 
+    /// Streams a download without buffering the full response in memory.
     pub async fn download_stream(
         &self,
         url: impl AsRef<str>,
@@ -150,6 +176,10 @@ impl CloudConvertClient {
             .map(|chunk| chunk.map_err(Error::Http)))
     }
 
+    /// Streams a download to `destination` through a sibling temporary file.
+    ///
+    /// The destination is replaced atomically on success; the temp file is
+    /// removed if the download or rename fails.
     pub async fn download_to_path(
         &self,
         url: impl AsRef<str>,
@@ -161,6 +191,9 @@ impl CloudConvertClient {
             .await
     }
 
+    /// Uploads bytes to an `import/upload` task using its presigned form.
+    ///
+    /// Returns [`Error::UploadTaskNotReady`] when the task has no upload form yet.
     pub async fn upload_bytes(
         &self,
         task: &Task,
@@ -239,9 +272,6 @@ impl CloudConvertClient {
         let form = Self::upload_form(task)?;
         let mut multipart = multipart::Form::new();
         for (key, value) in &form.parameters {
-            // A null parameter means "absent". Submitting it as an empty text
-            // field would add a form field outside the signed parameter set and
-            // can break strict presigned-POST signature validation.
             if value.is_null() {
                 continue;
             }
@@ -383,10 +413,6 @@ impl CloudConvertClient {
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
-        // Only idempotent requests may be replayed. A POST/PATCH that already
-        // reached the server before a transient timeout or 5xx would otherwise
-        // be re-sent, creating duplicate jobs/tasks/webhooks. When the method
-        // cannot be determined (build error), fall back to no retries.
         let idempotent = build()
             .build()
             .map(|request| Self::is_idempotent_method(request.method()))
@@ -439,9 +465,6 @@ impl CloudConvertClient {
         matches!(status, 429 | 500 | 502 | 503 | 504)
     }
 
-    /// Methods whose replay is safe because a duplicate delivery has the same
-    /// effect as a single one. POST and PATCH are excluded: re-sending an
-    /// accepted create would produce duplicate CloudConvert resources.
     #[cfg(feature = "retry")]
     fn is_idempotent_method(method: &Method) -> bool {
         matches!(
@@ -556,6 +579,7 @@ fn api_url(base: &Url, path: &str) -> Result<Url> {
     base.join(path).map_err(Error::Url)
 }
 
+// Rejects path segments that could escape the configured API base URL.
 fn validate_api_path(path: &str) -> Result<()> {
     let valid = !path.is_empty()
         && path.split('/').all(|segment| {
@@ -572,6 +596,7 @@ fn validate_api_path(path: &str) -> Result<()> {
     }
 }
 
+// Resource ids are interpolated into URL paths, so only safe tokens are accepted.
 fn resource_id(id: &str) -> Result<&str> {
     let valid = !id.is_empty()
         && id
@@ -588,15 +613,10 @@ fn resource_id(id: &str) -> Result<&str> {
 #[cfg(feature = "retry")]
 fn next_retry_delay(current: Duration, policy: &crate::RetryPolicy) -> Duration {
     let max = policy.max_delay_value();
-    // Use checked float math instead of `Duration::mul_f64`, which panics on a
-    // non-finite or overflowing product. A bad factor or huge initial delay
-    // saturates to `max_delay` rather than aborting the request task.
     let scaled = current.as_secs_f64() * policy.backoff_factor_value();
     Duration::try_from_secs_f64(scaled).unwrap_or(max).min(max)
 }
 
-/// Parses a `Retry-After` header value per RFC 7231 §7.1.3, which permits either
-/// delta-seconds or an HTTP-date. A date in the past yields a zero delay.
 #[cfg(feature = "retry")]
 fn parse_retry_after(value: &str) -> Option<Duration> {
     let value = value.trim();
@@ -611,6 +631,7 @@ fn parse_retry_after(value: &str) -> Option<Duration> {
     )
 }
 
+/// Job REST endpoints, including sync wait and optional Socket.IO wait helpers.
 #[derive(Clone, Debug)]
 pub struct JobsResource {
     client: CloudConvertClient,
@@ -629,6 +650,7 @@ impl JobsResource {
         Ok(CloudConvertClient::into_page(response))
     }
 
+    /// Creates a job and returns immediately with the current job state.
     pub async fn create(&self, request: impl Into<JobCreateRequest>) -> Result<Job> {
         Ok(self.create_response(request).await?.data)
     }
@@ -642,10 +664,14 @@ impl JobsResource {
             .await
     }
 
+    /// Creates a job on the sync API host and blocks until it reaches a terminal state.
     pub async fn create_and_wait(&self, request: impl Into<JobCreateRequest>) -> Result<Job> {
         Ok(self.create_and_wait_response(request).await?.data)
     }
 
+    /// Creates a job, then waits for completion via Socket.IO when still in flight.
+    ///
+    /// Requires the `socket` crate feature.
     #[cfg(feature = "socket")]
     pub async fn create_and_wait_socket(
         &self,
@@ -721,10 +747,14 @@ impl JobsResource {
             .await
     }
 
+    /// Blocks on the sync API host until the job reaches a terminal state.
     pub async fn wait(&self, id: impl AsRef<str>) -> Result<Job> {
         Ok(self.wait_response(id).await?.data)
     }
 
+    /// Waits for a terminal job event over Socket.IO, falling back to REST on gaps.
+    ///
+    /// Requires the `socket` crate feature.
     #[cfg(feature = "socket")]
     pub async fn wait_socket(&self, id: impl AsRef<str>) -> Result<Job> {
         let id = resource_id(id.as_ref())?.to_string();
@@ -739,9 +769,6 @@ impl JobsResource {
             let event = match socket.next_event().await {
                 Some(event) => event,
                 None => {
-                    // The channel closed without a terminal event. Reconcile with
-                    // a final GET: the job may have finished while we missed the
-                    // event (fast-completion race, reconnect gap, dropped buffer).
                     let current = self.get(&id).await?;
                     if current.is_terminal() {
                         return Ok(current);
@@ -756,10 +783,6 @@ impl JobsResource {
                 continue;
             }
 
-            // The event name claims terminal, but trust the payload status. If
-            // the embedded job is missing or not actually terminal (stale or
-            // unrecognized status), reconcile with a GET; if it is still not
-            // terminal, keep waiting for a later event.
             let job = match event.job()? {
                 Some(job) if job.id == id && job.is_terminal() => job,
                 Some(job) if job.id == id => self.get(&id).await?,
@@ -838,6 +861,7 @@ impl JobsResource {
     }
 }
 
+/// Standalone task REST endpoints and optional Socket.IO wait helpers.
 #[derive(Clone, Debug)]
 pub struct TasksResource {
     client: CloudConvertClient,
@@ -901,10 +925,14 @@ impl TasksResource {
             .await
     }
 
+    /// Blocks on the sync API host until the task reaches a terminal state.
     pub async fn wait(&self, id: impl AsRef<str>) -> Result<Task> {
         Ok(self.wait_response(id).await?.data)
     }
 
+    /// Waits for a terminal task event over Socket.IO, falling back to REST on gaps.
+    ///
+    /// Requires the `socket` crate feature.
     #[cfg(feature = "socket")]
     pub async fn wait_socket(&self, id: impl AsRef<str>) -> Result<Task> {
         let id = resource_id(id.as_ref())?.to_string();
@@ -922,9 +950,6 @@ impl TasksResource {
             let event = match socket.next_event().await {
                 Some(event) => event,
                 None => {
-                    // The channel closed without a terminal event. Reconcile with
-                    // a final GET: the task may have finished while we missed the
-                    // event (fast-completion race, reconnect gap, dropped buffer).
                     let current = self.get(&id).await?;
                     if current.is_terminal() {
                         return Ok(current);
@@ -939,10 +964,6 @@ impl TasksResource {
                 continue;
             }
 
-            // The event name claims terminal, but trust the payload status. If
-            // the embedded task is missing or not actually terminal (stale or
-            // unrecognized status), reconcile with a GET; if it is still not
-            // terminal, keep waiting for a later event.
             let task = match event.task()? {
                 Some(task) if task.id == id && task.is_terminal() => task,
                 Some(task) if task.id == id => self.get(&id).await?,
@@ -1024,6 +1045,7 @@ impl TasksResource {
     }
 }
 
+/// Account endpoints and helpers that resolve user-scoped Socket.IO channels.
 #[derive(Clone, Debug)]
 pub struct UsersResource {
     client: CloudConvertClient,
@@ -1089,6 +1111,7 @@ impl UsersResource {
     }
 }
 
+/// Webhook registration endpoints for the authenticated account.
 #[derive(Clone, Debug)]
 pub struct WebhooksResource {
     client: CloudConvertClient,
@@ -1128,6 +1151,7 @@ impl WebhooksResource {
     }
 }
 
+/// Operations metadata listing engines, formats, and documented options.
 #[derive(Clone, Debug)]
 pub struct OperationsResource {
     client: CloudConvertClient,
@@ -1227,7 +1251,6 @@ mod retry_after_tests {
         let target = SystemTime::now() + Duration::from_secs(120);
         let header = httpdate::fmt_http_date(target);
         let delay = parse_retry_after(&header).expect("http-date should parse");
-        // HTTP-date has whole-second granularity, so allow a small window.
         assert!(delay <= Duration::from_secs(121));
         assert!(delay >= Duration::from_secs(115));
     }
@@ -1278,14 +1301,12 @@ mod retry_after_tests {
         use super::next_retry_delay;
         use crate::RetryPolicy;
 
-        // A finite-but-huge factor overflows Duration::mul_f64; saturate to max.
         let policy = RetryPolicy::default()
             .max_delay(Duration::from_secs(10))
             .backoff_factor(1e308);
         let delay = next_retry_delay(Duration::from_secs(u64::MAX / 2), &policy);
         assert_eq!(delay, Duration::from_secs(10));
 
-        // Normal growth is still capped by max_delay.
         let policy = RetryPolicy::default()
             .max_delay(Duration::from_secs(10))
             .backoff_factor(2.0);

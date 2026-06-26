@@ -1,8 +1,14 @@
+//! Account and webhook resource models returned by CloudConvert user endpoints.
+//!
+//! [`User`] represents the authenticated account. Webhook types model event
+//! subscriptions CloudConvert delivers to caller-controlled URLs.
+
 use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+/// Authenticated CloudConvert account returned by `GET /v2/users/me`.
 #[derive(Clone, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct User {
@@ -29,6 +35,7 @@ impl fmt::Debug for User {
     }
 }
 
+/// Event name CloudConvert can deliver to a registered webhook URL.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WebhookEvent {
@@ -82,6 +89,7 @@ impl<'de> Deserialize<'de> for WebhookEvent {
     }
 }
 
+/// Request body for `POST /v2/webhooks`.
 #[derive(Clone, Debug, Serialize)]
 pub struct WebhookCreateRequest {
     url: String,
@@ -105,6 +113,7 @@ impl WebhookCreateRequest {
     }
 }
 
+/// Query parameters for listing registered webhooks.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct WebhookListQuery {
     #[serde(rename = "filter[url]", skip_serializing_if = "Option::is_none")]
@@ -132,6 +141,7 @@ impl WebhookListQuery {
     }
 }
 
+/// Registered webhook subscription, including optional signing secret metadata.
 #[derive(Clone, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct Webhook {

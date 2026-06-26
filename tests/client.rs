@@ -266,9 +266,6 @@ async fn operation_metadata_validates_task_requests_when_requested() {
     let error = operation.validate_task_strict(&unknown).unwrap_err();
     assert_eq!(error.kind, OperationValidationErrorKind::UnknownOption);
 
-    // The operation record is docx/pdf-like (output_format "png" in the mock).
-    // A task whose output_format disagrees with the record must be rejected,
-    // even in lenient mode.
     let wrong_format =
         TaskRequest::from(ConvertTask::new("import-file", "jpg").option("width", 800));
     let error = operation.validate_task(&wrong_format).unwrap_err();
@@ -280,8 +277,6 @@ async fn operation_metadata_validates_task_requests_when_requested() {
 
 #[test]
 fn strict_validation_accepts_structural_operation_fields() {
-    // An import/url operation whose options map does not list the structural
-    // url/headers fields. Strict mode must still accept the SDK-built task.
     let operation: Operation = serde_json::from_value(json!({
         "operation": "import/url",
         "options": {
@@ -296,10 +291,8 @@ fn strict_validation_accepts_structural_operation_fields() {
             .filename("in.pdf"),
     );
 
-    // url and headers are structural fields, not unknown options.
     operation.validate_task_strict(&task).unwrap();
 
-    // A genuinely unknown option is still rejected in strict mode.
     let bogus: TaskRequest = TaskRequest::custom("import/url")
         .field("url", "https://example.test/in.pdf")
         .field("not_a_real_field", true)
@@ -925,8 +918,6 @@ async fn retry_feature_does_not_replay_post_creates() {
         )
         .build();
 
-    // The POST returns a retryable 503. A non-idempotent create must NOT be
-    // replayed, so the error surfaces after a single attempt.
     let result = client.jobs().create(request).await;
     assert!(result.is_err());
     assert_eq!(*api.observed.flaky_create_attempts.lock().await, 1);
@@ -1005,10 +996,8 @@ async fn uploads_to_presigned_form_without_bearer_auth() {
     assert!(body.contains("fake-upload-signature"));
     assert!(body.contains("input.pdf"));
     assert!(body.contains("%PDF-1.7"));
-    // Non-null parameters are present...
     assert!(body.contains("name=\"signature\""));
     assert!(body.contains("name=\"enabled\""));
-    // ...but a null parameter is omitted, not sent as an empty field.
     assert!(!body.contains("name=\"empty\""));
 }
 
@@ -1344,8 +1333,6 @@ async fn create_job(
     Json(payload): Json<Value>,
 ) -> Response {
     record_api_auth(&observed, &headers).await;
-    // A POST create that always returns a retryable status; used to prove the
-    // retry policy does NOT replay non-idempotent requests.
     if payload["tag"] == json!("flaky-create") {
         *observed.flaky_create_attempts.lock().await += 1;
         return (

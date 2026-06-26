@@ -1,10 +1,18 @@
+//! Error taxonomy for API, transport, builder, and webhook validation failures.
+//!
+//! [`Error::api_error`] exposes structured CloudConvert HTTP error bodies,
+//! including rate-limit metadata parsed from response headers, when the
+//! failure originated from a non-success API response.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::jobs::RateLimit;
 
+/// Convenience result alias used throughout the crate.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// Top-level failure type for API, transport, builder, and validation errors.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -59,6 +67,7 @@ pub enum Error {
 }
 
 impl Error {
+    /// Returns structured API error details when `self` is [`Error::Api`].
     pub fn api_error(&self) -> Option<ApiError<'_>> {
         match self {
             Self::Api {
@@ -82,6 +91,7 @@ impl Error {
     }
 }
 
+/// Borrowed view of a CloudConvert HTTP error body and rate-limit headers.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct ApiError<'a> {
@@ -93,6 +103,7 @@ pub struct ApiError<'a> {
     pub retry_after: Option<u64>,
 }
 
+/// Error returned when a job builder method is called in an invalid state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InvalidBuilderState {
     pub kind: InvalidBuilderStateKind,
@@ -124,6 +135,7 @@ impl std::fmt::Display for InvalidBuilderState {
 
 impl std::error::Error for InvalidBuilderState {}
 
+/// Specific reason a job builder rejected the current call sequence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum InvalidBuilderStateKind {

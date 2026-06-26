@@ -1,3 +1,9 @@
+//! CloudConvert operations metadata and local task validation helpers.
+//!
+//! [`Operation`] records describe supported engines, formats, and documented
+//! options returned by `GET /v2/operations`. [`Operation::validate_task`]
+//! checks a [`TaskRequest`] against that metadata before sending it to the API.
+
 use std::collections::BTreeMap;
 
 use std::{error::Error as StdError, fmt};
@@ -8,6 +14,7 @@ use serde_json::Value;
 use crate::file_extension::normalize_file_extension;
 use crate::tasks::TaskRequest;
 
+/// Query parameters for `GET /v2/operations`.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct OperationListQuery {
     #[serde(rename = "filter[operation]", skip_serializing_if = "Option::is_none")]
@@ -98,6 +105,7 @@ impl OperationListQuery {
     }
 }
 
+/// One supported CloudConvert operation with engines, options, and alternatives.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct Operation {
@@ -157,10 +165,12 @@ impl Operation {
             .find(|version| version.latest.unwrap_or(false))
     }
 
+    /// Validates a task against this operation record, ignoring unknown options.
     pub fn validate_task(&self, task: &TaskRequest) -> OperationValidationResult {
         self.validate_task_with_mode(task, OperationValidationMode::Lenient)
     }
 
+    /// Validates a task and rejects options not documented for this operation.
     pub fn validate_task_strict(&self, task: &TaskRequest) -> OperationValidationResult {
         self.validate_task_with_mode(task, OperationValidationMode::Strict)
     }
@@ -199,9 +209,6 @@ impl Operation {
             ));
         }
 
-        // A task is validated against a specific operation record, so its
-        // canonical format/engine fields must agree with that record when both
-        // sides specify them. This applies in lenient and strict modes alike.
         self.check_identity_field(task, "input_format", &self.input_format)?;
         self.check_identity_field(task, "output_format", &self.output_format)?;
         self.check_identity_field(task, "engine", &self.engine)?;
@@ -237,6 +244,7 @@ impl Operation {
     }
 }
 
+/// Documented option schema for a CloudConvert operation.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct OperationOption {
@@ -297,9 +305,6 @@ impl OperationOption {
         }
 
         if !self.possible_values.is_empty() {
-            // For an array option, `possible_values` enumerates the allowed
-            // array *elements*, so each submitted element must be a member.
-            // Other kinds compare the whole value against the allowed set.
             let allowed = match (&self.kind, value) {
                 (Some(OperationOptionKind::Array), Value::Array(items)) => items
                     .iter()
@@ -320,6 +325,7 @@ impl OperationOption {
     }
 }
 
+/// Declared value type for an operation option in metadata responses.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OperationOptionKind {
@@ -392,6 +398,7 @@ impl<'de> Deserialize<'de> for OperationOptionKind {
     }
 }
 
+/// Engine version entry attached to an [`Operation`] metadata record.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct OperationEngineVersion {
@@ -408,6 +415,7 @@ pub struct OperationEngineVersion {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// Controls whether undocumented task options are accepted during validation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OperationValidationMode {
@@ -415,8 +423,10 @@ pub enum OperationValidationMode {
     Strict,
 }
 
+/// Result of validating a [`TaskRequest`] against an [`Operation`] record.
 pub type OperationValidationResult = std::result::Result<(), OperationValidationError>;
 
+/// Validation failure describing which operation field or option was rejected.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OperationValidationError {
     pub kind: OperationValidationErrorKind,
@@ -512,6 +522,7 @@ impl fmt::Display for OperationValidationError {
 
 impl StdError for OperationValidationError {}
 
+/// Specific validation failure category for an operation or option check.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OperationValidationErrorKind {
@@ -592,20 +603,9 @@ where
         .collect())
 }
 
-/// Returns true for payload keys that are SDK-emitted structural fields rather
-/// than configurable operation options.
-///
-/// CloudConvert's `operation.options` only describes tunable options (e.g.
-/// `width`, `fit`), not the structural wiring of a task: its input/output
-/// references, import/export source and credential fields, and the primary
-/// required payload of operations like `command` or `metadata/write`. Those
-/// must not be flagged as unknown options in strict validation. Tunable options
-/// (watermark/convert/optimize/thumbnail settings) are intentionally absent so
-/// strict mode still validates them against the options map.
 fn is_common_task_field(name: &str) -> bool {
     matches!(
         name,
-        // Shared task-level fields.
         "input"
             | "ignore_error"
             | "input_format"
@@ -614,7 +614,6 @@ fn is_common_task_field(name: &str) -> bool {
             | "engine_version"
             | "filename"
             | "timeout"
-            // Import/export source and target references.
             | "url"
             | "headers"
             | "file"
@@ -622,7 +621,6 @@ fn is_common_task_field(name: &str) -> bool {
             | "path"
             | "inline"
             | "archive_multiple_files"
-            // Object-storage location and credential fields.
             | "bucket"
             | "region"
             | "endpoint"
@@ -645,7 +643,6 @@ fn is_common_task_field(name: &str) -> bool {
             | "port"
             | "username"
             | "password"
-            // Primary required payloads of non-format operations.
             | "command"
             | "arguments"
             | "capture_output"

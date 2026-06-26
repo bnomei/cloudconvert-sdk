@@ -1,3 +1,10 @@
+//! CloudConvert Socket.IO channel names, subscriptions, and event decoding.
+//!
+//! Channel helpers build the `private-*` names CloudConvert expects. With the
+//! `socket` feature enabled, [`CloudConvertSocket`] manages subscriptions and
+//! exposes typed job and task lifecycle events for wait helpers in
+//! [`crate::JobsResource`] and [`crate::TasksResource`].
+
 use std::{borrow::Cow, collections::BTreeMap, fmt};
 
 #[cfg(feature = "socket")]
@@ -21,6 +28,7 @@ use crate::{
     jobs::{Job, Task},
 };
 
+/// Socket.IO channel selector for job, task, or user-scoped event streams.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum SocketChannel {
@@ -67,6 +75,7 @@ impl SocketChannel {
         }
     }
 
+    /// Returns the `private-*` channel name CloudConvert expects at subscribe time.
     pub fn name(&self) -> Cow<'_, str> {
         match self {
             Self::Job { job_id } => Cow::Owned(format!("private-job.{job_id}")),
@@ -120,6 +129,7 @@ impl SocketChannel {
     }
 }
 
+/// Job lifecycle event names emitted over Socket.IO.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum JobSocketEvent {
@@ -150,6 +160,7 @@ impl JobSocketEvent {
     }
 }
 
+/// Task lifecycle event names emitted over Socket.IO.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TaskSocketEvent {
@@ -180,6 +191,7 @@ impl TaskSocketEvent {
     }
 }
 
+/// Parsed Socket.IO event name, including unknown custom events.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum SocketEventKind {
@@ -217,6 +229,7 @@ impl SocketEventKind {
     }
 }
 
+/// Bearer-authenticated subscribe payload sent to the Socket.IO server.
 #[derive(Clone, Serialize)]
 pub struct SocketSubscription {
     channel: String,
@@ -264,6 +277,7 @@ impl fmt::Debug for SocketAuth {
     }
 }
 
+/// Socket.IO base URL for production or sandbox environments.
 pub fn socket_base_url(sandbox: bool) -> &'static str {
     if sandbox {
         "https://socketio.sandbox.cloudconvert.com"
@@ -272,6 +286,7 @@ pub fn socket_base_url(sandbox: bool) -> &'static str {
     }
 }
 
+/// One decoded Socket.IO event with optional channel metadata and JSON payload.
 #[cfg(feature = "socket")]
 #[derive(Clone, Debug)]
 pub struct SocketEvent {
@@ -369,6 +384,9 @@ impl SocketEvent {
     }
 }
 
+/// Managed Socket.IO connection that buffers job and task lifecycle events.
+///
+/// Requires the `socket` crate feature.
 #[cfg(feature = "socket")]
 pub struct CloudConvertSocket {
     client: SocketIoClient,
@@ -388,6 +406,7 @@ impl fmt::Debug for CloudConvertSocket {
 
 #[cfg(feature = "socket")]
 impl CloudConvertSocket {
+    /// Connects to Socket.IO and subscribes to the provided channels.
     pub async fn connect(
         base_url: impl Into<String>,
         subscriptions: impl IntoIterator<Item = SocketSubscription>,
@@ -402,8 +421,6 @@ impl CloudConvertSocket {
     ) -> Result<Self> {
         let (sender, receiver) = mpsc::channel(buffer.max(1));
         let subscriptions: Vec<SocketSubscription> = subscriptions.into_iter().collect();
-        // Pre-serialize the subscribe payloads so a serialization failure surfaces
-        // here (before connecting) and so the reconnect handler can re-emit them.
         let payloads = subscriptions
             .iter()
             .map(serde_json::to_value)
@@ -429,6 +446,7 @@ impl CloudConvertSocket {
             .map_err(socket_error)
     }
 
+    /// Awaits the next buffered Socket.IO event, if any.
     pub async fn next_event(&mut self) -> Option<SocketEvent> {
         self.receiver.recv().await
     }
@@ -461,9 +479,7 @@ fn socket_client_builder(
         builder = builder.on(event, socket_event_callback(event, sender.clone()));
     }
 
-    // rust_socketio fires `Event::Connect` on every (re)connection. Re-emit the
-    // subscribe payloads each time so private channels are restored after a
-    // transport drop; otherwise managed waits stop receiving terminal events.
+    // CloudConvert drops channel subscriptions on reconnect, so resubscribe on connect.
     builder.on(Event::Connect, resubscribe_callback(subscribe_payloads))
 }
 

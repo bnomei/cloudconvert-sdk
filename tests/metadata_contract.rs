@@ -113,8 +113,6 @@ fn recorded_metadata_operation_fixtures_cover_drift_sensitive_options() {
     assert_eq!(error.kind, OperationValidationErrorKind::InvalidOptionType);
     assert_eq!(error.option.as_deref(), Some("metadata"));
 
-    // The `remove` option is an array whose possible_values enumerate allowed
-    // elements. An array of documented members must validate.
     let valid_array: TaskRequest = TaskRequest::custom("metadata/write")
         .field("input", "import-file")
         .field("metadata", json!({ "Author": "SDK" }))
@@ -122,7 +120,6 @@ fn recorded_metadata_operation_fixtures_cover_drift_sensitive_options() {
         .into();
     operation.validate_task(&valid_array).unwrap();
 
-    // An element outside possible_values is rejected.
     let invalid_array: TaskRequest = TaskRequest::custom("metadata/write")
         .field("input", "import-file")
         .field("metadata", json!({ "Author": "SDK" }))

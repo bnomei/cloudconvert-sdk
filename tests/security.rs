@@ -92,8 +92,6 @@ fn builder_resolves_default_sandbox_region_and_custom_urls() {
         "https://ap-southeast.sync.api.cloudconvert.com/v2/"
     );
 
-    // Custom bases without a trailing slash must be normalized so resource
-    // paths resolve under the configured root instead of dropping `/v2`.
     let unslashed = CloudConvertClient::builder(ApiKey::new("cc_test_fake_secret_key"))
         .with_base_urls(
             Url::parse("https://api.example.test/v2").unwrap(),
