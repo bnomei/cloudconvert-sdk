@@ -97,6 +97,38 @@ fn serializes_named_job_tasks() {
 }
 
 #[test]
+fn duplicate_explicit_task_names_are_suffixed_not_overwritten() {
+    let job = JobCreateRequest::builder()
+        .task(
+            "import-url",
+            ImportUrlTask::new("https://example.test/a.docx"),
+        )
+        .task(
+            "import-url",
+            ImportUrlTask::new("https://example.test/b.docx"),
+        )
+        .build();
+
+    let payload = serde_json::to_value(&job).unwrap();
+    let tasks = payload["tasks"].as_object().unwrap();
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks["import-url"]["url"], "https://example.test/a.docx");
+    assert_eq!(tasks["import-url-2"]["url"], "https://example.test/b.docx");
+}
+
+#[test]
+fn duplicate_named_task_handle_reflects_suffixed_name() {
+    let mut builder = JobCreateRequest::builder();
+    let first = builder.add_named_task("step", ImportUrlTask::new("https://example.test/a.docx"));
+    let second = builder.add_named_task("step", ImportUrlTask::new("https://example.test/b.docx"));
+    assert_eq!(first.as_str(), "step");
+    assert_eq!(second.as_str(), "step-2");
+
+    let payload = serde_json::to_value(builder.build()).unwrap();
+    assert_eq!(payload["tasks"].as_object().unwrap().len(), 2);
+}
+
+#[test]
 fn task_option_cannot_overwrite_canonical_fields() {
     // ConvertTask: option() must not replace input/output_format wiring.
     let convert = TaskRequest::from(

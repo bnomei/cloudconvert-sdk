@@ -419,9 +419,11 @@ impl JobBuilder {
     /// Adds a task with an explicit CloudConvert task name.
     ///
     /// This keeps compatibility with CloudConvert's keyed task object and with
-    /// existing code that already depends on task names.
+    /// existing code that already depends on task names. A name that is already
+    /// taken receives a numeric suffix (`name-2`, `name-3`, ...) so an earlier
+    /// task is never silently overwritten.
     pub fn task(mut self, name: impl Into<String>, task: impl Into<TaskRequest>) -> Self {
-        let name = TaskName::new(name);
+        let name = deduplicated_task_name(&name.into(), &self.request.tasks);
         self.request
             .tasks
             .insert(name.as_str().to_string(), task.into());
@@ -454,12 +456,15 @@ impl JobBuilder {
     }
 
     /// Adds a task with an explicit name and returns that name as a handle.
+    ///
+    /// If the name is already taken it receives a numeric suffix; the returned
+    /// handle reflects the actual name stored in the job.
     pub fn add_named_task(
         &mut self,
         name: impl Into<String>,
         task: impl Into<TaskRequest>,
     ) -> TaskName {
-        let name = TaskName::new(name);
+        let name = deduplicated_task_name(&name.into(), &self.request.tasks);
         self.request
             .tasks
             .insert(name.as_str().to_string(), task.into());
@@ -1106,9 +1111,15 @@ impl JobBuilder {
 }
 
 fn generated_task_name(operation: &str, existing: &BTreeMap<String, TaskRequest>) -> TaskName {
-    let base = task_name_base(operation);
+    deduplicated_task_name(&task_name_base(operation), existing)
+}
 
-    if !existing.contains_key(&base) {
+/// Returns `base` if unused, otherwise the first free `base-N` (N >= 2).
+///
+/// Explicit and generated task names share this so a duplicate name never
+/// silently overwrites an earlier task in the job's `tasks` map.
+fn deduplicated_task_name(base: &str, existing: &BTreeMap<String, TaskRequest>) -> TaskName {
+    if !existing.contains_key(base) {
         return TaskName::new(base);
     }
 
