@@ -377,7 +377,19 @@ impl CloudConvertClient {
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
-        let attempts = policy.max_attempts_value().max(1);
+        // Only idempotent requests may be replayed. A POST/PATCH that already
+        // reached the server before a transient timeout or 5xx would otherwise
+        // be re-sent, creating duplicate jobs/tasks/webhooks. When the method
+        // cannot be determined (build error), fall back to no retries.
+        let idempotent = build()
+            .build()
+            .map(|request| Self::is_idempotent_method(request.method()))
+            .unwrap_or(false);
+        let attempts = if idempotent {
+            policy.max_attempts_value().max(1)
+        } else {
+            1
+        };
         let mut delay = policy.initial_delay_value();
 
         for attempt in 1..=attempts {
@@ -420,6 +432,22 @@ impl CloudConvertClient {
     #[cfg(feature = "retry")]
     fn is_retryable_status(status: u16) -> bool {
         matches!(status, 429 | 500 | 502 | 503 | 504)
+    }
+
+    /// Methods whose replay is safe because a duplicate delivery has the same
+    /// effect as a single one. POST and PATCH are excluded: re-sending an
+    /// accepted create would produce duplicate CloudConvert resources.
+    #[cfg(feature = "retry")]
+    fn is_idempotent_method(method: &Method) -> bool {
+        matches!(
+            *method,
+            Method::GET
+                | Method::HEAD
+                | Method::OPTIONS
+                | Method::TRACE
+                | Method::PUT
+                | Method::DELETE
+        )
     }
 
     #[cfg(feature = "retry")]

@@ -44,6 +44,7 @@ struct Observed {
     upload_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
     oauth_token_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
     flaky_job_attempts: Arc<Mutex<u32>>,
+    flaky_create_attempts: Arc<Mutex<u32>>,
 }
 
 struct MockApi {
@@ -862,6 +863,36 @@ async fn retry_feature_retries_transient_api_statuses() {
 
 #[cfg(feature = "retry")]
 #[tokio::test]
+async fn retry_feature_does_not_replay_post_creates() {
+    let api = MockApi::spawn().await;
+    let client = CloudConvertClient::builder(ApiKey::new("cc_test_fake_key"))
+        .with_base_urls(api.base_url.clone(), api.base_url.clone())
+        .retry_policy(
+            RetryPolicy::new(3)
+                .initial_delay(Duration::from_millis(1))
+                .max_delay(Duration::from_millis(2))
+                .respect_retry_after(false),
+        )
+        .build()
+        .unwrap();
+
+    let request = JobCreateRequest::builder()
+        .tag("flaky-create")
+        .task(
+            "import-file",
+            ImportUrlTask::new("https://example.test/input.pdf"),
+        )
+        .build();
+
+    // The POST returns a retryable 503. A non-idempotent create must NOT be
+    // replayed, so the error surfaces after a single attempt.
+    let result = client.jobs().create(request).await;
+    assert!(result.is_err());
+    assert_eq!(*api.observed.flaky_create_attempts.lock().await, 1);
+}
+
+#[cfg(feature = "retry")]
+#[tokio::test]
 async fn retry_feature_respects_retry_after_headers() {
     let api = MockApi::spawn().await;
     let client = CloudConvertClient::builder(ApiKey::new("cc_test_fake_key"))
@@ -1267,6 +1298,17 @@ async fn create_job(
     Json(payload): Json<Value>,
 ) -> Response {
     record_api_auth(&observed, &headers).await;
+    // A POST create that always returns a retryable status; used to prove the
+    // retry policy does NOT replay non-idempotent requests.
+    if payload["tag"] == json!("flaky-create") {
+        *observed.flaky_create_attempts.lock().await += 1;
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [("retry-after", "0")],
+            Json(json!({ "message": "temporary CloudConvert outage", "code": "TEMPORARY" })),
+        )
+            .into_response();
+    }
     let redirect = payload["redirect"].as_bool().unwrap_or(false);
     observed.job_payloads.lock().await.push(payload);
     if redirect {
