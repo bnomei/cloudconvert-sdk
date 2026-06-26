@@ -4,7 +4,7 @@ use std::{borrow::Cow, collections::BTreeMap, fmt};
 use futures_util::{FutureExt, future::BoxFuture};
 #[cfg(feature = "socket")]
 use rust_socketio::{
-    Payload,
+    Event, Payload,
     asynchronous::{Client as SocketIoClient, ClientBuilder as SocketIoClientBuilder},
 };
 use serde::Serialize;
@@ -401,7 +401,14 @@ impl CloudConvertSocket {
         buffer: usize,
     ) -> Result<Self> {
         let (sender, receiver) = mpsc::channel(buffer.max(1));
-        let client = socket_client_builder(base_url.into(), sender)
+        let subscriptions: Vec<SocketSubscription> = subscriptions.into_iter().collect();
+        // Pre-serialize the subscribe payloads so a serialization failure surfaces
+        // here (before connecting) and so the reconnect handler can re-emit them.
+        let payloads = subscriptions
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<Value>, _>>()?;
+        let client = socket_client_builder(base_url.into(), sender, payloads)
             .connect()
             .await
             .map_err(socket_error)?;
@@ -435,6 +442,7 @@ impl CloudConvertSocket {
 fn socket_client_builder(
     base_url: String,
     sender: mpsc::Sender<SocketEvent>,
+    subscribe_payloads: Vec<Value>,
 ) -> SocketIoClientBuilder {
     let mut builder = SocketIoClientBuilder::new(base_url)
         .reconnect(true)
@@ -453,7 +461,25 @@ fn socket_client_builder(
         builder = builder.on(event, socket_event_callback(event, sender.clone()));
     }
 
-    builder
+    // rust_socketio fires `Event::Connect` on every (re)connection. Re-emit the
+    // subscribe payloads each time so private channels are restored after a
+    // transport drop; otherwise managed waits stop receiving terminal events.
+    builder.on(Event::Connect, resubscribe_callback(subscribe_payloads))
+}
+
+#[cfg(feature = "socket")]
+fn resubscribe_callback(
+    subscribe_payloads: Vec<Value>,
+) -> impl FnMut(Payload, SocketIoClient) -> BoxFuture<'static, ()> + Send + Sync + 'static {
+    move |_payload, client| {
+        let subscribe_payloads = subscribe_payloads.clone();
+        async move {
+            for payload in subscribe_payloads {
+                let _ = client.emit("subscribe", payload).await;
+            }
+        }
+        .boxed()
+    }
 }
 
 #[cfg(feature = "socket")]
