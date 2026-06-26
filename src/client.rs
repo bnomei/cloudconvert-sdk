@@ -587,8 +587,12 @@ fn resource_id(id: &str) -> Result<&str> {
 
 #[cfg(feature = "retry")]
 fn next_retry_delay(current: Duration, policy: &crate::RetryPolicy) -> Duration {
-    let next = current.mul_f64(policy.backoff_factor_value());
-    next.min(policy.max_delay_value())
+    let max = policy.max_delay_value();
+    // Use checked float math instead of `Duration::mul_f64`, which panics on a
+    // non-finite or overflowing product. A bad factor or huge initial delay
+    // saturates to `max_delay` rather than aborting the request task.
+    let scaled = current.as_secs_f64() * policy.backoff_factor_value();
+    Duration::try_from_secs_f64(scaled).unwrap_or(max).min(max)
 }
 
 /// Parses a `Retry-After` header value per RFC 7231 §7.1.3, which permits either
@@ -1238,5 +1242,54 @@ mod retry_after_tests {
     #[test]
     fn rejects_unparseable_value() {
         assert_eq!(parse_retry_after("not-a-date"), None);
+    }
+
+    #[test]
+    fn backoff_factor_rejects_non_finite_values() {
+        use crate::RetryPolicy;
+        assert_eq!(
+            RetryPolicy::default()
+                .backoff_factor(f64::INFINITY)
+                .backoff_factor_value(),
+            1.0
+        );
+        assert_eq!(
+            RetryPolicy::default()
+                .backoff_factor(f64::NAN)
+                .backoff_factor_value(),
+            1.0
+        );
+        assert_eq!(
+            RetryPolicy::default()
+                .backoff_factor(0.25)
+                .backoff_factor_value(),
+            1.0
+        );
+        assert_eq!(
+            RetryPolicy::default()
+                .backoff_factor(3.0)
+                .backoff_factor_value(),
+            3.0
+        );
+    }
+
+    #[test]
+    fn next_retry_delay_saturates_instead_of_panicking() {
+        use super::next_retry_delay;
+        use crate::RetryPolicy;
+
+        // A finite-but-huge factor overflows Duration::mul_f64; saturate to max.
+        let policy = RetryPolicy::default()
+            .max_delay(Duration::from_secs(10))
+            .backoff_factor(1e308);
+        let delay = next_retry_delay(Duration::from_secs(u64::MAX / 2), &policy);
+        assert_eq!(delay, Duration::from_secs(10));
+
+        // Normal growth is still capped by max_delay.
+        let policy = RetryPolicy::default()
+            .max_delay(Duration::from_secs(10))
+            .backoff_factor(2.0);
+        let delay = next_retry_delay(Duration::from_secs(1), &policy);
+        assert_eq!(delay, Duration::from_secs(2));
     }
 }

@@ -314,7 +314,13 @@ impl RetryPolicy {
     }
 
     pub fn backoff_factor(mut self, backoff_factor: f64) -> Self {
-        self.backoff_factor = backoff_factor.max(1.0);
+        // Reject non-finite factors (NaN/±inf): they would later panic
+        // `Duration::mul_f64` in the retry loop. Floor at 1.0 so delays grow.
+        self.backoff_factor = if backoff_factor.is_finite() {
+            backoff_factor.max(1.0)
+        } else {
+            1.0
+        };
         self
     }
 
