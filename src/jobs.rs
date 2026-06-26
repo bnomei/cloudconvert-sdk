@@ -138,6 +138,25 @@ pub struct JobCreateRequest {
     extra: BTreeMap<String, Value>,
 }
 
+/// Core job fields owned by the SDK that `option()` must never overwrite.
+///
+/// These keys are serialized from dedicated struct fields, and the
+/// `#[serde(flatten)]` `extra` map would otherwise be able to replace them at
+/// serialization time (serde permits flattened keys to collide with named
+/// fields). Inserting any of these via `option()` is rejected so the built task
+/// graph and other canonical properties cannot be silently corrupted.
+const RESERVED_JOB_FIELDS: [&str; 4] = ["tasks", "tag", "webhook_url", "redirect"];
+
+impl JobCreateRequest {
+    /// Inserts a custom top-level field, ignoring SDK-reserved keys.
+    fn insert_option(&mut self, key: String, value: Value) {
+        if RESERVED_JOB_FIELDS.contains(&key.as_str()) {
+            return;
+        }
+        self.extra.insert(key, value);
+    }
+}
+
 /// Name assigned to a task in a CloudConvert job request.
 ///
 /// `TaskName` is the serialized task-map key. Pass handles returned by
@@ -387,8 +406,13 @@ impl JobBuilder {
     }
 
     /// Adds a custom top-level job field.
+    ///
+    /// Keys that collide with SDK-owned job fields (`tasks`, `tag`,
+    /// `webhook_url`, `redirect`) are ignored so the built task graph and other
+    /// canonical properties cannot be overwritten. Use the dedicated builder
+    /// methods for those fields.
     pub fn option(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
-        self.request.extra.insert(key.into(), value.into());
+        self.request.insert_option(key.into(), value.into());
         self
     }
 
@@ -1182,8 +1206,13 @@ impl JobGraphBuilder {
     }
 
     /// Adds a custom top-level job field.
+    ///
+    /// Keys that collide with SDK-owned job fields (`tasks`, `tag`,
+    /// `webhook_url`, `redirect`) are ignored so the built task graph and other
+    /// canonical properties cannot be overwritten. Use the dedicated builder
+    /// methods for those fields.
     pub fn option(&mut self, key: impl Into<String>, value: impl Into<Value>) -> &mut Self {
-        self.builder.request.extra.insert(key.into(), value.into());
+        self.builder.request.insert_option(key.into(), value.into());
         self
     }
 

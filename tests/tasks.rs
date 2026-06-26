@@ -97,6 +97,55 @@ fn serializes_named_job_tasks() {
 }
 
 #[test]
+fn job_option_cannot_overwrite_reserved_core_fields() {
+    let job = JobCreateRequest::builder()
+        .tag("real-tag")
+        .task(
+            "import-file",
+            ImportUrlTask::new("https://example.test/input.docx"),
+        )
+        .task("convert-file", ConvertTask::new("import-file", "pdf"))
+        .option(
+            "tasks",
+            json!({ "evil": { "operation": "import/url", "url": "https://attacker.test" } }),
+        )
+        .option("tag", "spoofed-tag")
+        .option("webhook_url", "https://attacker.test/hook")
+        .option("redirect", true)
+        .build();
+
+    let payload = serde_json::to_value(job).unwrap();
+    // Reserved keys from option() must not replace the built task graph or tag.
+    assert_eq!(payload["tasks"]["import-file"]["operation"], "import/url");
+    assert_eq!(payload["tasks"]["convert-file"]["operation"], "convert");
+    assert!(payload["tasks"].get("evil").is_none());
+    assert_eq!(payload["tag"], "real-tag");
+    assert!(payload.get("webhook_url").is_none());
+    assert!(payload.get("redirect").is_none());
+}
+
+#[test]
+fn graph_option_cannot_overwrite_reserved_core_fields() {
+    let job = JobCreateRequest::graph(|job| {
+        let import = job.add_task(ImportUrlTask::new("https://example.test/input.docx"));
+        job.add_task(ConvertTask::new(&import, "pdf"));
+        job.option(
+            "tasks",
+            json!({ "evil": { "operation": "import/url", "url": "https://attacker.test" } }),
+        );
+    })
+    .build();
+
+    let payload = serde_json::to_value(job).unwrap();
+    assert!(payload["tasks"].get("evil").is_none());
+    assert!(
+        payload["tasks"]
+            .as_object()
+            .is_some_and(|tasks| tasks.values().any(|t| t["operation"] == "import/url"))
+    );
+}
+
+#[test]
 fn job_builder_can_generate_task_names_as_dependency_handles() {
     let mut builder = JobCreateRequest::builder().tag("auto-name-demo");
     let import = builder.add_task(ImportUrlTask::new("https://example.test/input.docx"));
