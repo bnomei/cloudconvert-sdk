@@ -711,10 +711,21 @@ impl JobsResource {
         }
 
         loop {
-            let event = socket
-                .next_event()
-                .await
-                .ok_or_else(|| Error::Socket(format!("socket closed before job {id} completed")))?;
+            let event = match socket.next_event().await {
+                Some(event) => event,
+                None => {
+                    // The channel closed without a terminal event. Reconcile with
+                    // a final GET: the job may have finished while we missed the
+                    // event (fast-completion race, reconnect gap, dropped buffer).
+                    let current = self.get(&id).await?;
+                    if current.is_terminal() {
+                        return Ok(current);
+                    }
+                    return Err(Error::Socket(format!(
+                        "socket closed before job {id} completed"
+                    )));
+                }
+            };
 
             if !event.is_job_event() || !event.is_terminal() {
                 continue;
@@ -875,9 +886,21 @@ impl TasksResource {
         }
 
         loop {
-            let event = socket.next_event().await.ok_or_else(|| {
-                Error::Socket(format!("socket closed before task {id} completed"))
-            })?;
+            let event = match socket.next_event().await {
+                Some(event) => event,
+                None => {
+                    // The channel closed without a terminal event. Reconcile with
+                    // a final GET: the task may have finished while we missed the
+                    // event (fast-completion race, reconnect gap, dropped buffer).
+                    let current = self.get(&id).await?;
+                    if current.is_terminal() {
+                        return Ok(current);
+                    }
+                    return Err(Error::Socket(format!(
+                        "socket closed before task {id} completed"
+                    )));
+                }
+            };
 
             if !event.is_task_event() || !event.is_terminal() {
                 continue;
