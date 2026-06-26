@@ -542,9 +542,20 @@ where
         .collect())
 }
 
+/// Returns true for payload keys that are SDK-emitted structural fields rather
+/// than configurable operation options.
+///
+/// CloudConvert's `operation.options` only describes tunable options (e.g.
+/// `width`, `fit`), not the structural wiring of a task: its input/output
+/// references, import/export source and credential fields, and the primary
+/// required payload of operations like `command` or `metadata/write`. Those
+/// must not be flagged as unknown options in strict validation. Tunable options
+/// (watermark/convert/optimize/thumbnail settings) are intentionally absent so
+/// strict mode still validates them against the options map.
 fn is_common_task_field(name: &str) -> bool {
     matches!(
         name,
+        // Shared task-level fields.
         "input"
             | "ignore_error"
             | "input_format"
@@ -553,6 +564,42 @@ fn is_common_task_field(name: &str) -> bool {
             | "engine_version"
             | "filename"
             | "timeout"
+            // Import/export source and target references.
+            | "url"
+            | "headers"
+            | "file"
+            | "file_prefix"
+            | "path"
+            | "inline"
+            | "archive_multiple_files"
+            // Object-storage location and credential fields.
+            | "bucket"
+            | "region"
+            | "endpoint"
+            | "key"
+            | "key_prefix"
+            | "access_key_id"
+            | "secret_access_key"
+            | "session_token"
+            | "storage_account"
+            | "storage_access_key"
+            | "sas_token"
+            | "container"
+            | "blob"
+            | "blob_prefix"
+            | "project_id"
+            | "client_email"
+            | "private_key"
+            | "auth_url"
+            | "host"
+            | "port"
+            | "username"
+            | "password"
+            // Primary required payloads of non-format operations.
+            | "command"
+            | "arguments"
+            | "capture_output"
+            | "metadata"
     )
 }
 

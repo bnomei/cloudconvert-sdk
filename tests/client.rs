@@ -268,6 +268,36 @@ async fn operation_metadata_validates_task_requests_when_requested() {
 }
 
 #[test]
+fn strict_validation_accepts_structural_operation_fields() {
+    // An import/url operation whose options map does not list the structural
+    // url/headers fields. Strict mode must still accept the SDK-built task.
+    let operation: Operation = serde_json::from_value(json!({
+        "operation": "import/url",
+        "options": {
+            "filename": { "type": "string" }
+        }
+    }))
+    .unwrap();
+
+    let task = TaskRequest::from(
+        ImportUrlTask::new("https://example.test/in.pdf")
+            .header("Authorization", "Bearer x")
+            .filename("in.pdf"),
+    );
+
+    // url and headers are structural fields, not unknown options.
+    operation.validate_task_strict(&task).unwrap();
+
+    // A genuinely unknown option is still rejected in strict mode.
+    let bogus: TaskRequest = TaskRequest::custom("import/url")
+        .field("url", "https://example.test/in.pdf")
+        .field("not_a_real_field", true)
+        .into();
+    let error = operation.validate_task_strict(&bogus).unwrap_err();
+    assert_eq!(error.kind, OperationValidationErrorKind::UnknownOption);
+}
+
+#[test]
 fn operation_metadata_covers_wire_variants_and_validation_helpers() {
     let operation: Operation = serde_json::from_value(json!({
         "operation": "convert",
