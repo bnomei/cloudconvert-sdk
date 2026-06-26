@@ -296,15 +296,24 @@ impl OperationOption {
             ));
         }
 
-        if !self.possible_values.is_empty()
-            && !self.possible_values.iter().any(|allowed| allowed == value)
-        {
-            return Err(OperationValidationError::invalid_value(
-                operation,
-                name,
-                "one of the documented possible_values",
-                value,
-            ));
+        if !self.possible_values.is_empty() {
+            // For an array option, `possible_values` enumerates the allowed
+            // array *elements*, so each submitted element must be a member.
+            // Other kinds compare the whole value against the allowed set.
+            let allowed = match (&self.kind, value) {
+                (Some(OperationOptionKind::Array), Value::Array(items)) => items
+                    .iter()
+                    .all(|item| self.possible_values.iter().any(|allowed| allowed == item)),
+                _ => self.possible_values.iter().any(|allowed| allowed == value),
+            };
+            if !allowed {
+                return Err(OperationValidationError::invalid_value(
+                    operation,
+                    name,
+                    "one of the documented possible_values",
+                    value,
+                ));
+            }
         }
 
         Ok(())
