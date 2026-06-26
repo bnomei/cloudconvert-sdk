@@ -737,11 +737,19 @@ impl JobsResource {
                 continue;
             }
 
+            // The event name claims terminal, but trust the payload status. If
+            // the embedded job is missing or not actually terminal (stale or
+            // unrecognized status), reconcile with a GET; if it is still not
+            // terminal, keep waiting for a later event.
             let job = match event.job()? {
-                Some(job) if job.id == id => job,
+                Some(job) if job.id == id && job.is_terminal() => job,
+                Some(job) if job.id == id => self.get(&id).await?,
                 Some(_) => continue,
                 None => self.get(&id).await?,
             };
+            if !job.is_terminal() {
+                continue;
+            }
 
             let _ = socket.disconnect().await;
             return Ok(job);
@@ -912,11 +920,19 @@ impl TasksResource {
                 continue;
             }
 
+            // The event name claims terminal, but trust the payload status. If
+            // the embedded task is missing or not actually terminal (stale or
+            // unrecognized status), reconcile with a GET; if it is still not
+            // terminal, keep waiting for a later event.
             let task = match event.task()? {
-                Some(task) if task.id == id => task,
+                Some(task) if task.id == id && task.is_terminal() => task,
+                Some(task) if task.id == id => self.get(&id).await?,
                 Some(_) => continue,
                 None => self.get(&id).await?,
             };
+            if !task.is_terminal() {
+                continue;
+            }
 
             let _ = socket.disconnect().await;
             return Ok(task);
