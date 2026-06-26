@@ -239,6 +239,12 @@ impl CloudConvertClient {
         let form = Self::upload_form(task)?;
         let mut multipart = multipart::Form::new();
         for (key, value) in &form.parameters {
+            // A null parameter means "absent". Submitting it as an empty text
+            // field would add a form field outside the signed parameter set and
+            // can break strict presigned-POST signature validation.
+            if value.is_null() {
+                continue;
+            }
             multipart = multipart.text(key.clone(), form_value(value));
         }
         multipart = multipart.part(field_name.to_string(), part);

@@ -964,6 +964,11 @@ async fn uploads_to_presigned_form_without_bearer_auth() {
     assert!(body.contains("fake-upload-signature"));
     assert!(body.contains("input.pdf"));
     assert!(body.contains("%PDF-1.7"));
+    // Non-null parameters are present...
+    assert!(body.contains("name=\"signature\""));
+    assert!(body.contains("name=\"enabled\""));
+    // ...but a null parameter is omitted, not sent as an empty field.
+    assert!(!body.contains("name=\"empty\""));
 }
 
 #[tokio::test]
