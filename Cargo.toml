@@ -25,7 +25,7 @@ keywords = [
 
 [features]
 default = []
-retry = []
+retry = ["dep:httpdate"]
 socket = ["dep:rust_socketio"]
 
 [dependencies]
@@ -34,6 +34,7 @@ bytes = "1.11.1"
 futures-util = "0.3.32"
 hex = "0.4.3"
 hmac = "0.13.0"
+httpdate = { version = "1.0.3", optional = true }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "multipart", "stream", "rustls", "query"] }
 rust_socketio = { version = "0.6.0", features = ["async"], optional = true }
 secrecy = "0.10.3"

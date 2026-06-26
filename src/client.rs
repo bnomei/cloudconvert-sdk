@@ -411,8 +411,7 @@ impl CloudConvertClient {
                             .headers()
                             .get("retry-after")
                             .and_then(|value| value.to_str().ok())
-                            .and_then(|value| value.parse::<u64>().ok())
-                            .map(Duration::from_secs)
+                            .and_then(parse_retry_after)
                     });
                     let sleep_for = retry_after
                         .flatten()
@@ -590,6 +589,22 @@ fn resource_id(id: &str) -> Result<&str> {
 fn next_retry_delay(current: Duration, policy: &crate::RetryPolicy) -> Duration {
     let next = current.mul_f64(policy.backoff_factor_value());
     next.min(policy.max_delay_value())
+}
+
+/// Parses a `Retry-After` header value per RFC 7231 §7.1.3, which permits either
+/// delta-seconds or an HTTP-date. A date in the past yields a zero delay.
+#[cfg(feature = "retry")]
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let target = httpdate::parse_http_date(value).ok()?;
+    Some(
+        target
+            .duration_since(SystemTime::now())
+            .unwrap_or(Duration::ZERO),
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -1190,4 +1205,38 @@ fn unique_suffix() -> String {
         .unwrap_or_default();
 
     format!("{}-{nanos}", std::process::id())
+}
+
+#[cfg(all(test, feature = "retry"))]
+mod retry_after_tests {
+    use super::parse_retry_after;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn parses_delta_seconds() {
+        assert_eq!(parse_retry_after("30"), Some(Duration::from_secs(30)));
+        assert_eq!(parse_retry_after("  5 "), Some(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn parses_http_date_in_the_future() {
+        let target = SystemTime::now() + Duration::from_secs(120);
+        let header = httpdate::fmt_http_date(target);
+        let delay = parse_retry_after(&header).expect("http-date should parse");
+        // HTTP-date has whole-second granularity, so allow a small window.
+        assert!(delay <= Duration::from_secs(121));
+        assert!(delay >= Duration::from_secs(115));
+    }
+
+    #[test]
+    fn http_date_in_the_past_yields_zero() {
+        let target = SystemTime::now() - Duration::from_secs(120);
+        let header = httpdate::fmt_http_date(target);
+        assert_eq!(parse_retry_after(&header), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn rejects_unparseable_value() {
+        assert_eq!(parse_retry_after("not-a-date"), None);
+    }
 }

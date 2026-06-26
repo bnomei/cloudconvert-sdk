@@ -229,6 +229,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hmac",
+ "httpdate",
  "reqwest 0.13.4",
  "rstest",
  "rust_socketio",
