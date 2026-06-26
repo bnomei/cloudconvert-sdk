@@ -165,6 +165,28 @@ impl Operation {
         self.validate_task_with_mode(task, OperationValidationMode::Strict)
     }
 
+    fn check_identity_field(
+        &self,
+        task: &TaskRequest,
+        field: &str,
+        expected: &Option<String>,
+    ) -> OperationValidationResult {
+        if let (Some(expected), Some(actual)) = (
+            expected.as_deref(),
+            task.payload().get(field).and_then(Value::as_str),
+        ) {
+            if expected != actual {
+                return Err(OperationValidationError::format_mismatch(
+                    &self.operation,
+                    field,
+                    expected,
+                    actual,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate_task_with_mode(
         &self,
         task: &TaskRequest,
@@ -176,6 +198,14 @@ impl Operation {
                 task.operation(),
             ));
         }
+
+        // A task is validated against a specific operation record, so its
+        // canonical format/engine fields must agree with that record when both
+        // sides specify them. This applies in lenient and strict modes alike.
+        self.check_identity_field(task, "input_format", &self.input_format)?;
+        self.check_identity_field(task, "output_format", &self.output_format)?;
+        self.check_identity_field(task, "engine", &self.engine)?;
+        self.check_identity_field(task, "engine_version", &self.engine_version)?;
 
         for (name, option) in &self.options {
             let value = task.payload().get(name);
@@ -398,6 +428,16 @@ impl OperationValidationError {
         }
     }
 
+    fn format_mismatch(operation: &str, field: &str, expected: &str, actual: &str) -> Self {
+        Self {
+            kind: OperationValidationErrorKind::FormatMismatch,
+            operation: operation.to_string(),
+            option: Some(field.to_string()),
+            expected: Some(expected.to_string()),
+            actual: Some(actual.to_string()),
+        }
+    }
+
     fn missing_required(operation: &str, option: &str) -> Self {
         Self {
             kind: OperationValidationErrorKind::MissingRequiredOption,
@@ -467,6 +507,7 @@ impl StdError for OperationValidationError {}
 #[non_exhaustive]
 pub enum OperationValidationErrorKind {
     OperationMismatch,
+    FormatMismatch,
     MissingRequiredOption,
     InvalidOptionType,
     InvalidOptionValue,

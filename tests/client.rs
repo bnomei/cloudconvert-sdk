@@ -265,6 +265,17 @@ async fn operation_metadata_validates_task_requests_when_requested() {
     operation.validate_task(&unknown).unwrap();
     let error = operation.validate_task_strict(&unknown).unwrap_err();
     assert_eq!(error.kind, OperationValidationErrorKind::UnknownOption);
+
+    // The operation record is docx/pdf-like (output_format "png" in the mock).
+    // A task whose output_format disagrees with the record must be rejected,
+    // even in lenient mode.
+    let wrong_format =
+        TaskRequest::from(ConvertTask::new("import-file", "jpg").option("width", 800));
+    let error = operation.validate_task(&wrong_format).unwrap_err();
+    assert_eq!(error.kind, OperationValidationErrorKind::FormatMismatch);
+    assert_eq!(error.option.as_deref(), Some("output_format"));
+    assert_eq!(error.expected.as_deref(), Some("png"));
+    assert_eq!(error.actual.as_deref(), Some("jpg"));
 }
 
 #[test]
