@@ -231,7 +231,9 @@ impl Operation {
 
         if matches!(mode, OperationValidationMode::Strict) && !self.options.is_empty() {
             for name in task.payload().keys() {
-                if !self.options.contains_key(name) && !is_common_task_field(name) {
+                if !self.options.contains_key(name)
+                    && !is_structural_task_field(&self.operation, name)
+                {
                     return Err(OperationValidationError::unknown_option(
                         &self.operation,
                         name,
@@ -603,50 +605,184 @@ where
         .collect())
 }
 
-fn is_common_task_field(name: &str) -> bool {
+fn is_structural_task_field(operation: &str, name: &str) -> bool {
+    if matches!(name, "ignore_error") {
+        return true;
+    }
+
+    match operation {
+        "import/url" => matches!(name, "url" | "filename" | "headers"),
+        "import/upload" => matches!(name, "redirect"),
+        "import/base64" | "import/raw" => matches!(name, "file" | "filename"),
+        "import/s3" => matches!(
+            name,
+            "bucket"
+                | "region"
+                | "endpoint"
+                | "key"
+                | "key_prefix"
+                | "access_key_id"
+                | "secret_access_key"
+                | "session_token"
+                | "filename"
+        ),
+        "import/azure/blob" => matches!(
+            name,
+            "storage_account"
+                | "storage_access_key"
+                | "sas_token"
+                | "container"
+                | "blob"
+                | "blob_prefix"
+                | "filename"
+        ),
+        "import/google-cloud-storage" => matches!(
+            name,
+            "project_id"
+                | "bucket"
+                | "client_email"
+                | "private_key"
+                | "file"
+                | "file_prefix"
+                | "filename"
+        ),
+        "import/openstack" => matches!(
+            name,
+            "auth_url"
+                | "username"
+                | "password"
+                | "region"
+                | "container"
+                | "file"
+                | "file_prefix"
+                | "filename"
+        ),
+        "import/sftp" => matches!(
+            name,
+            "host"
+                | "port"
+                | "username"
+                | "password"
+                | "private_key"
+                | "file"
+                | "path"
+                | "filename"
+        ),
+        "convert" => is_file_processing_field(name),
+        "optimize" | "metadata" => matches!(
+            name,
+            "input" | "input_format" | "engine" | "engine_version" | "filename" | "timeout"
+        ),
+        "watermark" => matches!(
+            name,
+            "input" | "input_format" | "engine" | "engine_version" | "filename" | "timeout"
+        ),
+        "capture-website" => matches!(
+            name,
+            "url" | "output_format" | "engine" | "engine_version" | "filename" | "timeout"
+        ),
+        "thumbnail" => is_file_processing_field(name),
+        "metadata/write" => matches!(
+            name,
+            "input"
+                | "input_format"
+                | "engine"
+                | "engine_version"
+                | "metadata"
+                | "filename"
+                | "timeout"
+        ),
+        "merge" | "archive" => matches!(
+            name,
+            "input" | "output_format" | "engine" | "engine_version" | "filename" | "timeout"
+        ),
+        "command" => matches!(
+            name,
+            "input"
+                | "engine"
+                | "command"
+                | "arguments"
+                | "engine_version"
+                | "capture_output"
+                | "timeout"
+        ),
+        "pdf/a" | "pdf/x" | "pdf/ocr" | "pdf/encrypt" | "pdf/decrypt" | "pdf/split-pages"
+        | "pdf/extract-pages" | "pdf/rotate-pages" => matches!(
+            name,
+            "input" | "engine" | "engine_version" | "filename" | "timeout"
+        ),
+        "export/url" => matches!(name, "input" | "inline" | "archive_multiple_files"),
+        "export/s3" => matches!(
+            name,
+            "input"
+                | "bucket"
+                | "region"
+                | "endpoint"
+                | "key"
+                | "key_prefix"
+                | "access_key_id"
+                | "secret_access_key"
+                | "session_token"
+        ),
+        "export/azure/blob" => matches!(
+            name,
+            "input"
+                | "storage_account"
+                | "storage_access_key"
+                | "sas_token"
+                | "container"
+                | "blob"
+                | "blob_prefix"
+        ),
+        "export/google-cloud-storage" => matches!(
+            name,
+            "input"
+                | "project_id"
+                | "bucket"
+                | "client_email"
+                | "private_key"
+                | "file"
+                | "file_prefix"
+        ),
+        "export/openstack" => matches!(
+            name,
+            "input"
+                | "auth_url"
+                | "username"
+                | "password"
+                | "region"
+                | "container"
+                | "file"
+                | "file_prefix"
+        ),
+        "export/sftp" => matches!(
+            name,
+            "input" | "host" | "port" | "username" | "password" | "private_key" | "file" | "path"
+        ),
+        "export/upload" => matches!(name, "input" | "url" | "headers"),
+        _ => matches!(
+            name,
+            "input"
+                | "input_format"
+                | "output_format"
+                | "engine"
+                | "engine_version"
+                | "filename"
+                | "timeout"
+        ),
+    }
+}
+
+fn is_file_processing_field(name: &str) -> bool {
     matches!(
         name,
         "input"
-            | "ignore_error"
             | "input_format"
             | "output_format"
             | "engine"
             | "engine_version"
             | "filename"
             | "timeout"
-            | "url"
-            | "headers"
-            | "file"
-            | "file_prefix"
-            | "path"
-            | "inline"
-            | "archive_multiple_files"
-            | "bucket"
-            | "region"
-            | "endpoint"
-            | "key"
-            | "key_prefix"
-            | "access_key_id"
-            | "secret_access_key"
-            | "session_token"
-            | "storage_account"
-            | "storage_access_key"
-            | "sas_token"
-            | "container"
-            | "blob"
-            | "blob_prefix"
-            | "project_id"
-            | "client_email"
-            | "private_key"
-            | "auth_url"
-            | "host"
-            | "port"
-            | "username"
-            | "password"
-            | "command"
-            | "arguments"
-            | "capture_output"
-            | "metadata"
     )
 }
 

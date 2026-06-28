@@ -302,6 +302,30 @@ fn strict_validation_accepts_structural_operation_fields() {
 }
 
 #[test]
+fn strict_validation_keeps_structural_fields_operation_specific() {
+    let operation: Operation = serde_json::from_value(json!({
+        "operation": "convert",
+        "options": {
+            "width": { "type": "integer" }
+        }
+    }))
+    .unwrap();
+
+    for unknown_field in ["url", "bucket"] {
+        let task: TaskRequest = TaskRequest::custom("convert")
+            .field("input", "import-file")
+            .field("output_format", "pdf")
+            .field("width", 800)
+            .field(unknown_field, "import-only-value")
+            .into();
+
+        let error = operation.validate_task_strict(&task).unwrap_err();
+        assert_eq!(error.kind, OperationValidationErrorKind::UnknownOption);
+        assert_eq!(error.option.as_deref(), Some(unknown_field));
+    }
+}
+
+#[test]
 fn operation_metadata_covers_wire_variants_and_validation_helpers() {
     let operation: Operation = serde_json::from_value(json!({
         "operation": "convert",
