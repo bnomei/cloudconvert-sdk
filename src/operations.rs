@@ -1,3 +1,9 @@
+//! CloudConvert operations metadata and local task validation helpers.
+//!
+//! [`Operation`] records describe supported engines, formats, and documented
+//! options returned by `GET /v2/operations`. [`Operation::validate_task`]
+//! checks a [`TaskRequest`] against that metadata before sending it to the API.
+
 use std::collections::BTreeMap;
 
 use std::{error::Error as StdError, fmt};
@@ -8,6 +14,7 @@ use serde_json::Value;
 use crate::file_extension::normalize_file_extension;
 use crate::tasks::TaskRequest;
 
+/// Query parameters for `GET /v2/operations`.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct OperationListQuery {
     #[serde(rename = "filter[operation]", skip_serializing_if = "Option::is_none")]
@@ -98,6 +105,7 @@ impl OperationListQuery {
     }
 }
 
+/// One supported CloudConvert operation with engines, options, and alternatives.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct Operation {
@@ -157,12 +165,36 @@ impl Operation {
             .find(|version| version.latest.unwrap_or(false))
     }
 
+    /// Validates a task against this operation record, ignoring unknown options.
     pub fn validate_task(&self, task: &TaskRequest) -> OperationValidationResult {
         self.validate_task_with_mode(task, OperationValidationMode::Lenient)
     }
 
+    /// Validates a task and rejects options not documented for this operation.
     pub fn validate_task_strict(&self, task: &TaskRequest) -> OperationValidationResult {
         self.validate_task_with_mode(task, OperationValidationMode::Strict)
+    }
+
+    fn check_identity_field(
+        &self,
+        task: &TaskRequest,
+        field: &str,
+        expected: &Option<String>,
+    ) -> OperationValidationResult {
+        if let (Some(expected), Some(actual)) = (
+            expected.as_deref(),
+            task.payload().get(field).and_then(Value::as_str),
+        ) {
+            if expected != actual {
+                return Err(OperationValidationError::format_mismatch(
+                    &self.operation,
+                    field,
+                    expected,
+                    actual,
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn validate_task_with_mode(
@@ -176,6 +208,11 @@ impl Operation {
                 task.operation(),
             ));
         }
+
+        self.check_identity_field(task, "input_format", &self.input_format)?;
+        self.check_identity_field(task, "output_format", &self.output_format)?;
+        self.check_identity_field(task, "engine", &self.engine)?;
+        self.check_identity_field(task, "engine_version", &self.engine_version)?;
 
         for (name, option) in &self.options {
             let value = task.payload().get(name);
@@ -194,7 +231,9 @@ impl Operation {
 
         if matches!(mode, OperationValidationMode::Strict) && !self.options.is_empty() {
             for name in task.payload().keys() {
-                if !self.options.contains_key(name) && !is_common_task_field(name) {
+                if !self.options.contains_key(name)
+                    && !is_structural_task_field(&self.operation, name)
+                {
                     return Err(OperationValidationError::unknown_option(
                         &self.operation,
                         name,
@@ -207,6 +246,7 @@ impl Operation {
     }
 }
 
+/// Documented option schema for a CloudConvert operation.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct OperationOption {
@@ -266,21 +306,28 @@ impl OperationOption {
             ));
         }
 
-        if !self.possible_values.is_empty()
-            && !self.possible_values.iter().any(|allowed| allowed == value)
-        {
-            return Err(OperationValidationError::invalid_value(
-                operation,
-                name,
-                "one of the documented possible_values",
-                value,
-            ));
+        if !self.possible_values.is_empty() {
+            let allowed = match (&self.kind, value) {
+                (Some(OperationOptionKind::Array), Value::Array(items)) => items
+                    .iter()
+                    .all(|item| self.possible_values.iter().any(|allowed| allowed == item)),
+                _ => self.possible_values.iter().any(|allowed| allowed == value),
+            };
+            if !allowed {
+                return Err(OperationValidationError::invalid_value(
+                    operation,
+                    name,
+                    "one of the documented possible_values",
+                    value,
+                ));
+            }
         }
 
         Ok(())
     }
 }
 
+/// Declared value type for an operation option in metadata responses.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OperationOptionKind {
@@ -353,6 +400,7 @@ impl<'de> Deserialize<'de> for OperationOptionKind {
     }
 }
 
+/// Engine version entry attached to an [`Operation`] metadata record.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct OperationEngineVersion {
@@ -369,6 +417,7 @@ pub struct OperationEngineVersion {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// Controls whether undocumented task options are accepted during validation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OperationValidationMode {
@@ -376,8 +425,10 @@ pub enum OperationValidationMode {
     Strict,
 }
 
+/// Result of validating a [`TaskRequest`] against an [`Operation`] record.
 pub type OperationValidationResult = std::result::Result<(), OperationValidationError>;
 
+/// Validation failure describing which operation field or option was rejected.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OperationValidationError {
     pub kind: OperationValidationErrorKind,
@@ -393,6 +444,16 @@ impl OperationValidationError {
             kind: OperationValidationErrorKind::OperationMismatch,
             operation: expected.to_string(),
             option: None,
+            expected: Some(expected.to_string()),
+            actual: Some(actual.to_string()),
+        }
+    }
+
+    fn format_mismatch(operation: &str, field: &str, expected: &str, actual: &str) -> Self {
+        Self {
+            kind: OperationValidationErrorKind::FormatMismatch,
+            operation: operation.to_string(),
+            option: Some(field.to_string()),
             expected: Some(expected.to_string()),
             actual: Some(actual.to_string()),
         }
@@ -463,10 +524,12 @@ impl fmt::Display for OperationValidationError {
 
 impl StdError for OperationValidationError {}
 
+/// Specific validation failure category for an operation or option check.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OperationValidationErrorKind {
     OperationMismatch,
+    FormatMismatch,
     MissingRequiredOption,
     InvalidOptionType,
     InvalidOptionValue,
@@ -542,11 +605,178 @@ where
         .collect())
 }
 
-fn is_common_task_field(name: &str) -> bool {
+fn is_structural_task_field(operation: &str, name: &str) -> bool {
+    if matches!(name, "ignore_error") {
+        return true;
+    }
+
+    match operation {
+        "import/url" => matches!(name, "url" | "filename" | "headers"),
+        "import/upload" => matches!(name, "redirect"),
+        "import/base64" | "import/raw" => matches!(name, "file" | "filename"),
+        "import/s3" => matches!(
+            name,
+            "bucket"
+                | "region"
+                | "endpoint"
+                | "key"
+                | "key_prefix"
+                | "access_key_id"
+                | "secret_access_key"
+                | "session_token"
+                | "filename"
+        ),
+        "import/azure/blob" => matches!(
+            name,
+            "storage_account"
+                | "storage_access_key"
+                | "sas_token"
+                | "container"
+                | "blob"
+                | "blob_prefix"
+                | "filename"
+        ),
+        "import/google-cloud-storage" => matches!(
+            name,
+            "project_id"
+                | "bucket"
+                | "client_email"
+                | "private_key"
+                | "file"
+                | "file_prefix"
+                | "filename"
+        ),
+        "import/openstack" => matches!(
+            name,
+            "auth_url"
+                | "username"
+                | "password"
+                | "region"
+                | "container"
+                | "file"
+                | "file_prefix"
+                | "filename"
+        ),
+        "import/sftp" => matches!(
+            name,
+            "host"
+                | "port"
+                | "username"
+                | "password"
+                | "private_key"
+                | "file"
+                | "path"
+                | "filename"
+        ),
+        "convert" => is_file_processing_field(name),
+        "optimize" | "metadata" => matches!(
+            name,
+            "input" | "input_format" | "engine" | "engine_version" | "filename" | "timeout"
+        ),
+        "watermark" => matches!(
+            name,
+            "input" | "input_format" | "engine" | "engine_version" | "filename" | "timeout"
+        ),
+        "capture-website" => matches!(
+            name,
+            "url" | "output_format" | "engine" | "engine_version" | "filename" | "timeout"
+        ),
+        "thumbnail" => is_file_processing_field(name),
+        "metadata/write" => matches!(
+            name,
+            "input"
+                | "input_format"
+                | "engine"
+                | "engine_version"
+                | "metadata"
+                | "filename"
+                | "timeout"
+        ),
+        "merge" | "archive" => matches!(
+            name,
+            "input" | "output_format" | "engine" | "engine_version" | "filename" | "timeout"
+        ),
+        "command" => matches!(
+            name,
+            "input"
+                | "engine"
+                | "command"
+                | "arguments"
+                | "engine_version"
+                | "capture_output"
+                | "timeout"
+        ),
+        "pdf/a" | "pdf/x" | "pdf/ocr" | "pdf/encrypt" | "pdf/decrypt" | "pdf/split-pages"
+        | "pdf/extract-pages" | "pdf/rotate-pages" => matches!(
+            name,
+            "input" | "engine" | "engine_version" | "filename" | "timeout"
+        ),
+        "export/url" => matches!(name, "input" | "inline" | "archive_multiple_files"),
+        "export/s3" => matches!(
+            name,
+            "input"
+                | "bucket"
+                | "region"
+                | "endpoint"
+                | "key"
+                | "key_prefix"
+                | "access_key_id"
+                | "secret_access_key"
+                | "session_token"
+        ),
+        "export/azure/blob" => matches!(
+            name,
+            "input"
+                | "storage_account"
+                | "storage_access_key"
+                | "sas_token"
+                | "container"
+                | "blob"
+                | "blob_prefix"
+        ),
+        "export/google-cloud-storage" => matches!(
+            name,
+            "input"
+                | "project_id"
+                | "bucket"
+                | "client_email"
+                | "private_key"
+                | "file"
+                | "file_prefix"
+        ),
+        "export/openstack" => matches!(
+            name,
+            "input"
+                | "auth_url"
+                | "username"
+                | "password"
+                | "region"
+                | "container"
+                | "file"
+                | "file_prefix"
+        ),
+        "export/sftp" => matches!(
+            name,
+            "input" | "host" | "port" | "username" | "password" | "private_key" | "file" | "path"
+        ),
+        "export/upload" => matches!(name, "input" | "url" | "headers"),
+        _ => matches!(
+            name,
+            "input"
+                | "input_format"
+                | "output_format"
+                | "engine"
+                | "engine_version"
+                | "filename"
+                | "timeout"
+        ),
+    }
+}
+
+fn is_file_processing_field(name: &str) -> bool {
     matches!(
         name,
         "input"
-            | "ignore_error"
             | "input_format"
             | "output_format"
             | "engine"
@@ -565,5 +795,252 @@ fn value_type(value: &Value) -> &'static str {
         Value::String(_) => "string",
         Value::Array(_) => "array",
         Value::Object(_) => "dictionary",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structural_task_fields_are_operation_specific() {
+        const FILE_PROCESSING_FIELDS: &[&str] = &[
+            "input",
+            "input_format",
+            "output_format",
+            "engine",
+            "engine_version",
+            "filename",
+            "timeout",
+        ];
+        const INPUT_PROCESSING_FIELDS: &[&str] = &[
+            "input",
+            "input_format",
+            "engine",
+            "engine_version",
+            "filename",
+            "timeout",
+        ];
+        const OUTPUT_PROCESSING_FIELDS: &[&str] = &[
+            "input",
+            "output_format",
+            "engine",
+            "engine_version",
+            "filename",
+            "timeout",
+        ];
+        const PDF_FIELDS: &[&str] = &["input", "engine", "engine_version", "filename", "timeout"];
+
+        let cases: &[(&str, &[&str])] = &[
+            ("import/url", &["url", "filename", "headers"]),
+            ("import/upload", &["redirect"]),
+            ("import/base64", &["file", "filename"]),
+            ("import/raw", &["file", "filename"]),
+            (
+                "import/s3",
+                &[
+                    "bucket",
+                    "region",
+                    "endpoint",
+                    "key",
+                    "key_prefix",
+                    "access_key_id",
+                    "secret_access_key",
+                    "session_token",
+                    "filename",
+                ],
+            ),
+            (
+                "import/azure/blob",
+                &[
+                    "storage_account",
+                    "storage_access_key",
+                    "sas_token",
+                    "container",
+                    "blob",
+                    "blob_prefix",
+                    "filename",
+                ],
+            ),
+            (
+                "import/google-cloud-storage",
+                &[
+                    "project_id",
+                    "bucket",
+                    "client_email",
+                    "private_key",
+                    "file",
+                    "file_prefix",
+                    "filename",
+                ],
+            ),
+            (
+                "import/openstack",
+                &[
+                    "auth_url",
+                    "username",
+                    "password",
+                    "region",
+                    "container",
+                    "file",
+                    "file_prefix",
+                    "filename",
+                ],
+            ),
+            (
+                "import/sftp",
+                &[
+                    "host",
+                    "port",
+                    "username",
+                    "password",
+                    "private_key",
+                    "file",
+                    "path",
+                    "filename",
+                ],
+            ),
+            ("convert", FILE_PROCESSING_FIELDS),
+            ("optimize", INPUT_PROCESSING_FIELDS),
+            ("metadata", INPUT_PROCESSING_FIELDS),
+            ("watermark", INPUT_PROCESSING_FIELDS),
+            (
+                "capture-website",
+                &[
+                    "url",
+                    "output_format",
+                    "engine",
+                    "engine_version",
+                    "filename",
+                    "timeout",
+                ],
+            ),
+            ("thumbnail", FILE_PROCESSING_FIELDS),
+            (
+                "metadata/write",
+                &[
+                    "input",
+                    "input_format",
+                    "engine",
+                    "engine_version",
+                    "metadata",
+                    "filename",
+                    "timeout",
+                ],
+            ),
+            ("merge", OUTPUT_PROCESSING_FIELDS),
+            ("archive", OUTPUT_PROCESSING_FIELDS),
+            (
+                "command",
+                &[
+                    "input",
+                    "engine",
+                    "command",
+                    "arguments",
+                    "engine_version",
+                    "capture_output",
+                    "timeout",
+                ],
+            ),
+            ("pdf/a", PDF_FIELDS),
+            ("pdf/x", PDF_FIELDS),
+            ("pdf/ocr", PDF_FIELDS),
+            ("pdf/encrypt", PDF_FIELDS),
+            ("pdf/decrypt", PDF_FIELDS),
+            ("pdf/split-pages", PDF_FIELDS),
+            ("pdf/extract-pages", PDF_FIELDS),
+            ("pdf/rotate-pages", PDF_FIELDS),
+            ("export/url", &["input", "inline", "archive_multiple_files"]),
+            (
+                "export/s3",
+                &[
+                    "input",
+                    "bucket",
+                    "region",
+                    "endpoint",
+                    "key",
+                    "key_prefix",
+                    "access_key_id",
+                    "secret_access_key",
+                    "session_token",
+                ],
+            ),
+            (
+                "export/azure/blob",
+                &[
+                    "input",
+                    "storage_account",
+                    "storage_access_key",
+                    "sas_token",
+                    "container",
+                    "blob",
+                    "blob_prefix",
+                ],
+            ),
+            (
+                "export/google-cloud-storage",
+                &[
+                    "input",
+                    "project_id",
+                    "bucket",
+                    "client_email",
+                    "private_key",
+                    "file",
+                    "file_prefix",
+                ],
+            ),
+            (
+                "export/openstack",
+                &[
+                    "input",
+                    "auth_url",
+                    "username",
+                    "password",
+                    "region",
+                    "container",
+                    "file",
+                    "file_prefix",
+                ],
+            ),
+            (
+                "export/sftp",
+                &[
+                    "input",
+                    "host",
+                    "port",
+                    "username",
+                    "password",
+                    "private_key",
+                    "file",
+                    "path",
+                ],
+            ),
+            ("export/upload", &["input", "url", "headers"]),
+            ("future/custom-op", FILE_PROCESSING_FIELDS),
+        ];
+
+        for &(operation, fields) in cases {
+            assert!(is_structural_task_field(operation, "ignore_error"));
+            for &field in fields {
+                assert!(
+                    is_structural_task_field(operation, field),
+                    "{operation} should accept structural field {field}"
+                );
+            }
+        }
+
+        for &(operation, field) in &[
+            ("convert", "url"),
+            ("convert", "bucket"),
+            ("import/url", "bucket"),
+            ("export/s3", "url"),
+            ("future/custom-op", "url"),
+            ("future/custom-op", "not_a_real_field"),
+        ] {
+            assert!(
+                !is_structural_task_field(operation, field),
+                "{operation} should reject unrelated field {field}"
+            );
+        }
     }
 }

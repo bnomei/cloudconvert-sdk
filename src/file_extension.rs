@@ -1,3 +1,9 @@
+//! CloudConvert file extension tokens and normalization helpers.
+//!
+//! [`FileExtension`] serializes to the lowercase extension string CloudConvert
+//! expects, without a leading dot. The enum is derived from operations metadata
+//! and accepts common user input variants through [`FileExtension::parse`].
+
 use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

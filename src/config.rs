@@ -1,3 +1,10 @@
+//! Client configuration: credentials, regions, transport, and optional retry.
+//!
+//! [`ClientBuilder`] resolves API and sync base URLs from sandbox and region
+//! settings, then constructs a [`CloudConvertClient`]. Secret-bearing types
+//! redact values in `Debug` output and expose raw strings only through
+//! crate-internal `expose` helpers used for Authorization headers.
+
 use std::{env, fmt, sync::Arc, time::Duration};
 
 use secrecy::{ExposeSecret, SecretString};
@@ -10,6 +17,7 @@ const SANDBOX_API_BASE: &str = "https://api.sandbox.cloudconvert.com/v2/";
 const SYNC_API_BASE: &str = "https://sync.api.cloudconvert.com/v2/";
 const SANDBOX_SYNC_API_BASE: &str = "https://sync.api.sandbox.cloudconvert.com/v2/";
 
+/// CloudConvert API key used as a bearer token.
 #[derive(Clone)]
 pub struct ApiKey(Arc<SecretString>);
 
@@ -22,6 +30,7 @@ impl ApiKey {
         self.0.expose_secret()
     }
 
+    /// Reads `CLOUDCONVERT_API_KEY` from the process environment.
     pub fn from_env() -> Result<Self> {
         env::var("CLOUDCONVERT_API_KEY")
             .map(Self::new)
@@ -35,6 +44,7 @@ impl fmt::Debug for ApiKey {
     }
 }
 
+/// OAuth access token used as a bearer token for API calls.
 #[derive(Clone)]
 pub struct OAuthAccessToken(Arc<SecretString>);
 
@@ -60,6 +70,7 @@ impl fmt::Debug for OAuthAccessToken {
     }
 }
 
+/// OAuth refresh token exchanged for a new access token.
 #[derive(Clone)]
 pub struct OAuthRefreshToken(Arc<SecretString>);
 
@@ -85,6 +96,7 @@ impl fmt::Debug for OAuthRefreshToken {
     }
 }
 
+/// OAuth client secret used during authorization-code and refresh flows.
 #[derive(Clone)]
 pub struct OAuthClientSecret(Arc<SecretString>);
 
@@ -134,6 +146,7 @@ impl fmt::Debug for BearerCredential {
     }
 }
 
+/// Shared secret for signing job URLs and webhook payloads.
 #[derive(Clone)]
 pub struct SigningSecret(Arc<SecretString>);
 
@@ -153,6 +166,7 @@ impl fmt::Debug for SigningSecret {
     }
 }
 
+/// Regional API hostname prefix for non-sandbox clients.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Region {
@@ -171,6 +185,7 @@ impl Region {
     }
 }
 
+/// Resolved client settings produced by [`ClientBuilder::build`].
 #[derive(Clone)]
 pub struct CloudConvertConfig {
     pub(crate) credential: BearerCredential,
@@ -215,6 +230,7 @@ impl fmt::Debug for CloudConvertConfig {
     }
 }
 
+/// Optional `reqwest` timeouts and user agent applied when building HTTP clients.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct TransportConfig {
@@ -262,6 +278,9 @@ impl TransportConfig {
     }
 }
 
+/// Retry policy for idempotent API requests when the `retry` feature is enabled.
+///
+/// Non-idempotent methods such as `POST` are never retried.
 #[cfg(feature = "retry")]
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -314,7 +333,11 @@ impl RetryPolicy {
     }
 
     pub fn backoff_factor(mut self, backoff_factor: f64) -> Self {
-        self.backoff_factor = backoff_factor.max(1.0);
+        self.backoff_factor = if backoff_factor.is_finite() {
+            backoff_factor.max(1.0)
+        } else {
+            1.0
+        };
         self
     }
 
@@ -341,6 +364,7 @@ impl Default for RetryPolicy {
     }
 }
 
+/// Configures credentials, base URLs, transport, and optional retry before build.
 #[derive(Clone, Debug)]
 pub struct ClientBuilder {
     credential: BearerCredential,
@@ -379,11 +403,13 @@ impl ClientBuilder {
         }
     }
 
+    /// Routes requests to the CloudConvert sandbox API hosts.
     pub fn sandbox(mut self, sandbox: bool) -> Self {
         self.sandbox = sandbox;
         self
     }
 
+    /// Selects a regional API hostname prefix for production requests.
     pub fn region(mut self, region: Region) -> Self {
         self.region = Some(region);
         self
@@ -421,15 +447,16 @@ impl ClientBuilder {
         self
     }
 
+    /// Builds a [`CloudConvertClient`] with resolved base URLs and HTTP clients.
     pub fn build(self) -> Result<crate::CloudConvertClient> {
-        let api_base_url = match self.api_base_url {
+        let api_base_url = ensure_trailing_slash(match self.api_base_url {
             Some(url) => url,
             None => default_api_url(self.sandbox, self.region.as_ref())?,
-        };
-        let sync_base_url = match self.sync_base_url {
+        });
+        let sync_base_url = ensure_trailing_slash(match self.sync_base_url {
             Some(url) => url,
             None => default_sync_url(self.sandbox, self.region.as_ref())?,
-        };
+        });
 
         let config = CloudConvertConfig {
             credential: self.credential,
@@ -496,6 +523,14 @@ fn http_client_builder(transport_config: Option<&TransportConfig>) -> reqwest::C
     }
 
     builder
+}
+
+fn ensure_trailing_slash(mut url: Url) -> Url {
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    url
 }
 
 fn default_api_url(sandbox: bool, region: Option<&Region>) -> Result<Url> {

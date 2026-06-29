@@ -1,3 +1,10 @@
+//! Typed CloudConvert task request builders and serialization helpers.
+//!
+//! Each `*Task` struct implements [`TaskPayload`] for one CloudConvert operation.
+//! Use [`TaskRequest`] factory methods, job builders in [`crate::JobCreateRequest`],
+//! or [`TaskRequest::custom`] when an operation is not yet typed by this crate.
+//! Per-task options can also flow through `option(...)` builders and `extra` maps.
+
 use std::{collections::BTreeMap, fmt};
 
 use serde::{Serialize, Serializer};
@@ -5,6 +12,7 @@ use serde_json::{Map, Value};
 
 use crate::file_extension::normalize_file_extension;
 
+/// Open-ended operation options serialized beside typed task fields.
 pub type ExtraOptions = BTreeMap<String, Value>;
 
 /// Input dependency for a CloudConvert task.
@@ -840,6 +848,8 @@ task_payload!(SftpImportTask, "import/sftp");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ConvertTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     #[serde(skip_serializing_if = "Option::is_none")]
     input_format: Option<String>,
@@ -852,8 +862,6 @@ pub struct ConvertTask {
     filename: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl ConvertTask {
@@ -905,6 +913,8 @@ task_payload!(ConvertTask, "convert");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct OptimizeTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     #[serde(skip_serializing_if = "Option::is_none")]
     input_format: Option<String>,
@@ -920,8 +930,6 @@ pub struct OptimizeTask {
     filename: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl OptimizeTask {
@@ -1019,6 +1027,8 @@ pub enum FontAlign {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WatermarkTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     #[serde(skip_serializing_if = "Option::is_none")]
     input_format: Option<String>,
@@ -1066,8 +1076,6 @@ pub struct WatermarkTask {
     engine_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl WatermarkTask {
@@ -1236,6 +1244,8 @@ task_payload!(WatermarkTask, "watermark");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CaptureWebsiteTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     url: String,
     output_format: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1246,8 +1256,6 @@ pub struct CaptureWebsiteTask {
     filename: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl CaptureWebsiteTask {
@@ -1293,6 +1301,8 @@ task_payload!(CaptureWebsiteTask, "capture-website");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ThumbnailTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     #[serde(skip_serializing_if = "Option::is_none")]
     input_format: Option<String>,
@@ -1315,8 +1325,6 @@ pub struct ThumbnailTask {
     filename: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl ThumbnailTask {
@@ -1404,6 +1412,8 @@ task_payload!(ThumbnailTask, "thumbnail");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct MetadataTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     #[serde(skip_serializing_if = "Option::is_none")]
     input_format: Option<String>,
@@ -1413,8 +1423,6 @@ pub struct MetadataTask {
     engine_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl MetadataTask {
@@ -1459,6 +1467,8 @@ task_payload!(MetadataTask, "metadata");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct MetadataWriteTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     #[serde(skip_serializing_if = "Option::is_none")]
     input_format: Option<String>,
@@ -1471,8 +1481,6 @@ pub struct MetadataWriteTask {
     filename: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl MetadataWriteTask {
@@ -1534,6 +1542,8 @@ task_payload!(MetadataWriteTask, "metadata/write");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct MergeTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     output_format: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1544,8 +1554,6 @@ pub struct MergeTask {
     filename: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl MergeTask {
@@ -1591,6 +1599,8 @@ task_payload!(MergeTask, "merge");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ArchiveTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     output_format: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1601,8 +1611,6 @@ pub struct ArchiveTask {
     filename: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl ArchiveTask {
@@ -1648,6 +1656,8 @@ task_payload!(ArchiveTask, "archive");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CommandTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     engine: String,
     command: String,
@@ -1658,8 +1668,6 @@ pub struct CommandTask {
     capture_output: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl CommandTask {
@@ -1708,6 +1716,8 @@ macro_rules! pdf_task {
     ($type:ident, $operation:literal) => {
         #[derive(Clone, Debug, Serialize)]
         pub struct $type {
+            #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+            extra: ExtraOptions,
             input: Input,
             #[serde(skip_serializing_if = "Option::is_none")]
             engine: Option<String>,
@@ -1717,8 +1727,6 @@ macro_rules! pdf_task {
             filename: Option<String>,
             #[serde(skip_serializing_if = "Option::is_none")]
             timeout: Option<u64>,
-            #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-            extra: ExtraOptions,
         }
 
         impl $type {
@@ -1805,6 +1813,8 @@ task_payload!(ExportUrlTask, "export/url");
 
 #[derive(Clone, Serialize)]
 pub struct S3ExportTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     bucket: String,
     region: String,
@@ -1818,8 +1828,6 @@ pub struct S3ExportTask {
     secret_access_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     session_token: Option<String>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl S3ExportTask {
@@ -1904,6 +1912,8 @@ task_payload!(S3ExportTask, "export/s3");
 
 #[derive(Clone, Serialize)]
 pub struct AzureBlobExportTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     storage_account: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1915,8 +1925,6 @@ pub struct AzureBlobExportTask {
     blob: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     blob_prefix: Option<String>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl AzureBlobExportTask {
@@ -1972,6 +1980,8 @@ task_payload!(AzureBlobExportTask, "export/azure/blob");
 
 #[derive(Clone, Serialize)]
 pub struct GoogleCloudStorageExportTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     project_id: String,
     bucket: String,
@@ -1981,8 +1991,6 @@ pub struct GoogleCloudStorageExportTask {
     file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     file_prefix: Option<String>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl GoogleCloudStorageExportTask {
@@ -2025,6 +2033,8 @@ task_payload!(GoogleCloudStorageExportTask, "export/google-cloud-storage");
 
 #[derive(Clone, Serialize)]
 pub struct OpenStackExportTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     auth_url: String,
     username: String,
@@ -2035,8 +2045,6 @@ pub struct OpenStackExportTask {
     file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     file_prefix: Option<String>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl OpenStackExportTask {
@@ -2081,6 +2089,8 @@ task_payload!(OpenStackExportTask, "export/openstack");
 
 #[derive(Clone, Serialize)]
 pub struct SftpExportTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     host: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2094,8 +2104,6 @@ pub struct SftpExportTask {
     file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl SftpExportTask {
@@ -2152,12 +2160,12 @@ task_payload!(SftpExportTask, "export/sftp");
 
 #[derive(Clone, Serialize)]
 pub struct ExportUploadTask {
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: ExtraOptions,
     input: Input,
     url: String,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     headers: BTreeMap<String, String>,
-    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    extra: ExtraOptions,
 }
 
 impl ExportUploadTask {

@@ -1,3 +1,9 @@
+//! Signed job URL builder for CloudConvert's hosted job widget flow.
+//!
+//! [`sign_job_url`] serializes a [`JobCreateRequest`], URL-safe base64-encodes
+//! it into the query string, and appends an HMAC-SHA256 signature derived from
+//! a [`SigningSecret`].
+
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
@@ -7,6 +13,7 @@ use crate::{JobCreateRequest, Result, SigningSecret};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Builds a signed job URL that embeds the serialized job request in the query string.
 pub fn sign_job_url(
     base_url: impl AsRef<str>,
     signing_secret: &SigningSecret,

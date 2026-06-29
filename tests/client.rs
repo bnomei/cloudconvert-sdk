@@ -44,6 +44,7 @@ struct Observed {
     upload_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
     oauth_token_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
     flaky_job_attempts: Arc<Mutex<u32>>,
+    flaky_create_attempts: Arc<Mutex<u32>>,
 }
 
 struct MockApi {
@@ -264,6 +265,64 @@ async fn operation_metadata_validates_task_requests_when_requested() {
     operation.validate_task(&unknown).unwrap();
     let error = operation.validate_task_strict(&unknown).unwrap_err();
     assert_eq!(error.kind, OperationValidationErrorKind::UnknownOption);
+
+    let wrong_format =
+        TaskRequest::from(ConvertTask::new("import-file", "jpg").option("width", 800));
+    let error = operation.validate_task(&wrong_format).unwrap_err();
+    assert_eq!(error.kind, OperationValidationErrorKind::FormatMismatch);
+    assert_eq!(error.option.as_deref(), Some("output_format"));
+    assert_eq!(error.expected.as_deref(), Some("png"));
+    assert_eq!(error.actual.as_deref(), Some("jpg"));
+}
+
+#[test]
+fn strict_validation_accepts_structural_operation_fields() {
+    let operation: Operation = serde_json::from_value(json!({
+        "operation": "import/url",
+        "options": {
+            "filename": { "type": "string" }
+        }
+    }))
+    .unwrap();
+
+    let task = TaskRequest::from(
+        ImportUrlTask::new("https://example.test/in.pdf")
+            .header("Authorization", "Bearer x")
+            .filename("in.pdf"),
+    );
+
+    operation.validate_task_strict(&task).unwrap();
+
+    let bogus: TaskRequest = TaskRequest::custom("import/url")
+        .field("url", "https://example.test/in.pdf")
+        .field("not_a_real_field", true)
+        .into();
+    let error = operation.validate_task_strict(&bogus).unwrap_err();
+    assert_eq!(error.kind, OperationValidationErrorKind::UnknownOption);
+}
+
+#[test]
+fn strict_validation_keeps_structural_fields_operation_specific() {
+    let operation: Operation = serde_json::from_value(json!({
+        "operation": "convert",
+        "options": {
+            "width": { "type": "integer" }
+        }
+    }))
+    .unwrap();
+
+    for unknown_field in ["url", "bucket"] {
+        let task: TaskRequest = TaskRequest::custom("convert")
+            .field("input", "import-file")
+            .field("output_format", "pdf")
+            .field("width", 800)
+            .field(unknown_field, "import-only-value")
+            .into();
+
+        let error = operation.validate_task_strict(&task).unwrap_err();
+        assert_eq!(error.kind, OperationValidationErrorKind::UnknownOption);
+        assert_eq!(error.option.as_deref(), Some(unknown_field));
+    }
 }
 
 #[test]
@@ -862,6 +921,34 @@ async fn retry_feature_retries_transient_api_statuses() {
 
 #[cfg(feature = "retry")]
 #[tokio::test]
+async fn retry_feature_does_not_replay_post_creates() {
+    let api = MockApi::spawn().await;
+    let client = CloudConvertClient::builder(ApiKey::new("cc_test_fake_key"))
+        .with_base_urls(api.base_url.clone(), api.base_url.clone())
+        .retry_policy(
+            RetryPolicy::new(3)
+                .initial_delay(Duration::from_millis(1))
+                .max_delay(Duration::from_millis(2))
+                .respect_retry_after(false),
+        )
+        .build()
+        .unwrap();
+
+    let request = JobCreateRequest::builder()
+        .tag("flaky-create")
+        .task(
+            "import-file",
+            ImportUrlTask::new("https://example.test/input.pdf"),
+        )
+        .build();
+
+    let result = client.jobs().create(request).await;
+    assert!(result.is_err());
+    assert_eq!(*api.observed.flaky_create_attempts.lock().await, 1);
+}
+
+#[cfg(feature = "retry")]
+#[tokio::test]
 async fn retry_feature_respects_retry_after_headers() {
     let api = MockApi::spawn().await;
     let client = CloudConvertClient::builder(ApiKey::new("cc_test_fake_key"))
@@ -933,6 +1020,9 @@ async fn uploads_to_presigned_form_without_bearer_auth() {
     assert!(body.contains("fake-upload-signature"));
     assert!(body.contains("input.pdf"));
     assert!(body.contains("%PDF-1.7"));
+    assert!(body.contains("name=\"signature\""));
+    assert!(body.contains("name=\"enabled\""));
+    assert!(!body.contains("name=\"empty\""));
 }
 
 #[tokio::test]
@@ -1267,6 +1357,15 @@ async fn create_job(
     Json(payload): Json<Value>,
 ) -> Response {
     record_api_auth(&observed, &headers).await;
+    if payload["tag"] == json!("flaky-create") {
+        *observed.flaky_create_attempts.lock().await += 1;
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [("retry-after", "0")],
+            Json(json!({ "message": "temporary CloudConvert outage", "code": "TEMPORARY" })),
+        )
+            .into_response();
+    }
     let redirect = payload["redirect"].as_bool().unwrap_or(false);
     observed.job_payloads.lock().await.push(payload);
     if redirect {

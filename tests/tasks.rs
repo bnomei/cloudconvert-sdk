@@ -97,6 +97,112 @@ fn serializes_named_job_tasks() {
 }
 
 #[test]
+fn duplicate_explicit_task_names_are_suffixed_not_overwritten() {
+    let job = JobCreateRequest::builder()
+        .task(
+            "import-url",
+            ImportUrlTask::new("https://example.test/a.docx"),
+        )
+        .task(
+            "import-url",
+            ImportUrlTask::new("https://example.test/b.docx"),
+        )
+        .build();
+
+    let payload = serde_json::to_value(&job).unwrap();
+    let tasks = payload["tasks"].as_object().unwrap();
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks["import-url"]["url"], "https://example.test/a.docx");
+    assert_eq!(tasks["import-url-2"]["url"], "https://example.test/b.docx");
+}
+
+#[test]
+fn duplicate_named_task_handle_reflects_suffixed_name() {
+    let mut builder = JobCreateRequest::builder();
+    let first = builder.add_named_task("step", ImportUrlTask::new("https://example.test/a.docx"));
+    let second = builder.add_named_task("step", ImportUrlTask::new("https://example.test/b.docx"));
+    assert_eq!(first.as_str(), "step");
+    assert_eq!(second.as_str(), "step-2");
+
+    let payload = serde_json::to_value(builder.build()).unwrap();
+    assert_eq!(payload["tasks"].as_object().unwrap().len(), 2);
+}
+
+#[test]
+fn task_option_cannot_overwrite_canonical_fields() {
+    let convert = TaskRequest::from(
+        ConvertTask::new("import-url", "pdf")
+            .option("input", "wrong-task")
+            .option("output_format", "exe")
+            .option("ui_group", "extra"),
+    );
+    let payload = serde_json::to_value(&convert).unwrap();
+    assert_eq!(payload["input"], "import-url");
+    assert_eq!(payload["output_format"], "pdf");
+    assert_eq!(payload["operation"], "convert");
+    assert_eq!(payload["ui_group"], "extra");
+
+    let pdf = TaskRequest::from(
+        PdfATask::new("import-file")
+            .engine("ghostscript")
+            .option("input", "attacker-task")
+            .option("engine", "evil"),
+    );
+    let pdf_payload = serde_json::to_value(&pdf).unwrap();
+    assert_eq!(pdf_payload["input"], "import-file");
+    assert_eq!(pdf_payload["engine"], "ghostscript");
+    assert_eq!(pdf_payload["operation"], "pdf/a");
+}
+
+#[test]
+fn job_option_cannot_overwrite_reserved_core_fields() {
+    let job = JobCreateRequest::builder()
+        .tag("real-tag")
+        .task(
+            "import-file",
+            ImportUrlTask::new("https://example.test/input.docx"),
+        )
+        .task("convert-file", ConvertTask::new("import-file", "pdf"))
+        .option(
+            "tasks",
+            json!({ "evil": { "operation": "import/url", "url": "https://attacker.test" } }),
+        )
+        .option("tag", "spoofed-tag")
+        .option("webhook_url", "https://attacker.test/hook")
+        .option("redirect", true)
+        .build();
+
+    let payload = serde_json::to_value(job).unwrap();
+    assert_eq!(payload["tasks"]["import-file"]["operation"], "import/url");
+    assert_eq!(payload["tasks"]["convert-file"]["operation"], "convert");
+    assert!(payload["tasks"].get("evil").is_none());
+    assert_eq!(payload["tag"], "real-tag");
+    assert!(payload.get("webhook_url").is_none());
+    assert!(payload.get("redirect").is_none());
+}
+
+#[test]
+fn graph_option_cannot_overwrite_reserved_core_fields() {
+    let job = JobCreateRequest::graph(|job| {
+        let import = job.add_task(ImportUrlTask::new("https://example.test/input.docx"));
+        job.add_task(ConvertTask::new(&import, "pdf"));
+        job.option(
+            "tasks",
+            json!({ "evil": { "operation": "import/url", "url": "https://attacker.test" } }),
+        );
+    })
+    .build();
+
+    let payload = serde_json::to_value(job).unwrap();
+    assert!(payload["tasks"].get("evil").is_none());
+    assert!(
+        payload["tasks"]
+            .as_object()
+            .is_some_and(|tasks| tasks.values().any(|t| t["operation"] == "import/url"))
+    );
+}
+
+#[test]
 fn job_builder_can_generate_task_names_as_dependency_handles() {
     let mut builder = JobCreateRequest::builder().tag("auto-name-demo");
     let import = builder.add_task(ImportUrlTask::new("https://example.test/input.docx"));

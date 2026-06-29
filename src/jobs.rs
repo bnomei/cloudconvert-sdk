@@ -1,3 +1,9 @@
+//! Job request builders and API response models for CloudConvert jobs and tasks.
+//!
+//! [`JobCreateRequest::linear`] and [`JobCreateRequest::graph`] generate the
+//! keyed `tasks` object CloudConvert expects. Response types preserve unknown
+//! API fields in `extra` maps and redact sensitive values in `Debug` output.
+
 use std::{collections::BTreeMap, convert::identity, fmt};
 
 use serde::{Deserialize, Serialize};
@@ -136,6 +142,17 @@ pub struct JobCreateRequest {
     pub(crate) redirect: Option<bool>,
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     extra: BTreeMap<String, Value>,
+}
+
+const RESERVED_JOB_FIELDS: [&str; 4] = ["tasks", "tag", "webhook_url", "redirect"];
+
+impl JobCreateRequest {
+    fn insert_option(&mut self, key: String, value: Value) {
+        if RESERVED_JOB_FIELDS.contains(&key.as_str()) {
+            return;
+        }
+        self.extra.insert(key, value);
+    }
 }
 
 /// Name assigned to a task in a CloudConvert job request.
@@ -388,7 +405,7 @@ impl JobBuilder {
 
     /// Adds a custom top-level job field.
     pub fn option(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
-        self.request.extra.insert(key.into(), value.into());
+        self.request.insert_option(key.into(), value.into());
         self
     }
 
@@ -397,7 +414,7 @@ impl JobBuilder {
     /// This keeps compatibility with CloudConvert's keyed task object and with
     /// existing code that already depends on task names.
     pub fn task(mut self, name: impl Into<String>, task: impl Into<TaskRequest>) -> Self {
-        let name = TaskName::new(name);
+        let name = deduplicated_task_name(&name.into(), &self.request.tasks);
         self.request
             .tasks
             .insert(name.as_str().to_string(), task.into());
@@ -435,7 +452,7 @@ impl JobBuilder {
         name: impl Into<String>,
         task: impl Into<TaskRequest>,
     ) -> TaskName {
-        let name = TaskName::new(name);
+        let name = deduplicated_task_name(&name.into(), &self.request.tasks);
         self.request
             .tasks
             .insert(name.as_str().to_string(), task.into());
@@ -1082,9 +1099,11 @@ impl JobBuilder {
 }
 
 fn generated_task_name(operation: &str, existing: &BTreeMap<String, TaskRequest>) -> TaskName {
-    let base = task_name_base(operation);
+    deduplicated_task_name(&task_name_base(operation), existing)
+}
 
-    if !existing.contains_key(&base) {
+fn deduplicated_task_name(base: &str, existing: &BTreeMap<String, TaskRequest>) -> TaskName {
+    if !existing.contains_key(base) {
         return TaskName::new(base);
     }
 
@@ -1183,7 +1202,7 @@ impl JobGraphBuilder {
 
     /// Adds a custom top-level job field.
     pub fn option(&mut self, key: impl Into<String>, value: impl Into<Value>) -> &mut Self {
-        self.builder.request.extra.insert(key.into(), value.into());
+        self.builder.request.insert_option(key.into(), value.into());
         self
     }
 
@@ -1835,6 +1854,7 @@ impl From<JobGraphBuilder> for JobCreateRequest {
     }
 }
 
+/// Query parameters for `GET /v2/jobs`.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct JobListQuery {
     #[serde(rename = "filter[status]", skip_serializing_if = "Option::is_none")]
@@ -1876,6 +1896,7 @@ impl JobListQuery {
     }
 }
 
+/// Query parameters for `GET /v2/jobs/{id}` and sync wait endpoints.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct JobGetQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1896,6 +1917,7 @@ impl JobGetQuery {
     }
 }
 
+/// Query parameters for `GET /v2/tasks`.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct TaskListQuery {
     #[serde(rename = "filter[job_id]", skip_serializing_if = "Option::is_none")]
@@ -1944,6 +1966,7 @@ impl TaskListQuery {
     }
 }
 
+/// Query parameters for `GET /v2/tasks/{id}`.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct TaskGetQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1957,6 +1980,7 @@ impl TaskGetQuery {
     }
 }
 
+/// Lifecycle status returned for a CloudConvert job.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -1991,6 +2015,7 @@ impl JobStatus {
     }
 }
 
+/// Lifecycle status returned for a CloudConvert task.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -2030,6 +2055,7 @@ impl TaskStatus {
     }
 }
 
+/// CloudConvert job returned by create, get, wait, and list endpoints.
 #[derive(Clone, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct Job {
@@ -2072,6 +2098,7 @@ impl Job {
         self.export_tasks().filter(|task| task.is_finished())
     }
 
+    /// Collects file results from finished `export/url` tasks in this job.
     pub fn export_urls(&self) -> Vec<&FileResult> {
         self.finished_export_tasks()
             .flat_map(JobTask::files)
@@ -2095,6 +2122,7 @@ impl fmt::Debug for Job {
     }
 }
 
+/// Task snapshot embedded in a [`Job`] response.
 #[derive(Clone, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct JobTask {
@@ -2168,6 +2196,7 @@ impl fmt::Debug for JobTask {
     }
 }
 
+/// Standalone CloudConvert task returned by task endpoints.
 #[derive(Clone, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct Task {
@@ -2215,6 +2244,7 @@ impl Task {
         self.operation == "import/upload"
     }
 
+    /// Returns the presigned upload form once an `import/upload` task is ready.
     pub fn upload_form(&self) -> Option<&UploadForm> {
         self.result
             .as_ref()
@@ -2255,6 +2285,7 @@ impl fmt::Debug for Task {
     }
 }
 
+/// Task output payload containing exported files or an upload form.
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct TaskResult {
@@ -2276,6 +2307,7 @@ impl fmt::Debug for TaskResult {
     }
 }
 
+/// One exported file entry, usually from an `export/url` task.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct FileResult {
@@ -2290,6 +2322,7 @@ pub struct FileResult {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// Presigned multipart upload target for an `import/upload` task.
 #[derive(Clone, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct UploadForm {

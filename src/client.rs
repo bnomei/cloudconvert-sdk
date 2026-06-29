@@ -1,3 +1,12 @@
+//! Async HTTP client and resource facades for CloudConvert API v2.
+//!
+//! [`CloudConvertClient`] owns bearer authentication, optional retry policy,
+//! and two HTTP clients: one that follows redirects for ordinary API traffic
+//! and one that preserves `Location` headers for sync redirect endpoints.
+//! Resource types such as [`JobsResource`] group REST calls by domain. File
+//! transfer helpers upload multipart data to import tasks and stream downloads
+//! from export URLs outside the API base URL.
+
 #[cfg(feature = "retry")]
 use std::time::Duration;
 use std::{
@@ -37,18 +46,22 @@ use crate::{
 #[cfg(feature = "socket")]
 use crate::socket::CloudConvertSocket;
 
+/// Entry point for authenticated CloudConvert API calls and file transfer.
 #[derive(Clone, Debug)]
 pub struct CloudConvertClient {
     config: Arc<CloudConvertConfig>,
     http: reqwest::Client,
+    // Preserves redirect Location headers for sync wait and redirect URL endpoints.
     redirectless_http: reqwest::Client,
 }
 
 impl CloudConvertClient {
+    /// Starts a client builder authenticated with an API key.
     pub fn builder(api_key: ApiKey) -> ClientBuilder {
         ClientBuilder::new(api_key)
     }
 
+    /// Starts a client builder authenticated with an OAuth access token.
     pub fn builder_with_access_token(access_token: OAuthAccessToken) -> ClientBuilder {
         ClientBuilder::new_with_access_token(access_token)
     }
@@ -65,48 +78,59 @@ impl CloudConvertClient {
         })
     }
 
+    /// Returns the resolved client configuration, including base URLs and region.
     pub fn config(&self) -> &CloudConvertConfig {
         &self.config
     }
 
+    /// Job lifecycle endpoints: create, wait, list, and delete.
     pub fn jobs(&self) -> JobsResource {
         JobsResource {
             client: self.clone(),
         }
     }
 
+    /// Standalone task endpoints outside a job graph.
     pub fn tasks(&self) -> TasksResource {
         TasksResource {
             client: self.clone(),
         }
     }
 
+    /// Account endpoints and user-scoped Socket.IO subscriptions.
     pub fn users(&self) -> UsersResource {
         UsersResource {
             client: self.clone(),
         }
     }
 
+    /// Webhook registration and listing for the authenticated account.
     pub fn webhooks(&self) -> WebhooksResource {
         WebhooksResource {
             client: self.clone(),
         }
     }
 
+    /// CloudConvert operations metadata used to discover engines and options.
     pub fn operations(&self) -> OperationsResource {
         OperationsResource {
             client: self.clone(),
         }
     }
 
+    /// Socket.IO base URL for the client's sandbox or production environment.
     pub fn socket_base_url(&self) -> &'static str {
         crate::socket::socket_base_url(self.config.sandbox())
     }
 
+    /// Builds a bearer-authenticated subscription payload for a Socket.IO channel.
     pub fn socket_subscription(&self, channel: SocketChannel) -> SocketSubscription {
         SocketSubscription::new(channel.name().into_owned(), self.config.credential.expose())
     }
 
+    /// Connects to Socket.IO and subscribes to the given channels.
+    ///
+    /// Requires the `socket` crate feature.
     #[cfg(feature = "socket")]
     pub async fn socket(
         &self,
@@ -130,6 +154,7 @@ impl CloudConvertClient {
         CloudConvertSocket::connect_with_buffer(self.socket_base_url(), subscriptions, buffer).await
     }
 
+    /// Downloads a URL, typically an export file link, into memory.
     pub async fn download(&self, url: impl AsRef<str>) -> Result<Bytes> {
         let response = self.http.get(url.as_ref()).send().await?;
         Self::ensure_success(response)
@@ -139,6 +164,7 @@ impl CloudConvertClient {
             .map_err(Error::Http)
     }
 
+    /// Streams a download without buffering the full response in memory.
     pub async fn download_stream(
         &self,
         url: impl AsRef<str>,
@@ -150,6 +176,10 @@ impl CloudConvertClient {
             .map(|chunk| chunk.map_err(Error::Http)))
     }
 
+    /// Streams a download to `destination` through a sibling temporary file.
+    ///
+    /// The destination is replaced atomically on success; the temp file is
+    /// removed if the download or rename fails.
     pub async fn download_to_path(
         &self,
         url: impl AsRef<str>,
@@ -161,6 +191,9 @@ impl CloudConvertClient {
             .await
     }
 
+    /// Uploads bytes to an `import/upload` task using its presigned form.
+    ///
+    /// Returns [`Error::UploadTaskNotReady`] when the task has no upload form yet.
     pub async fn upload_bytes(
         &self,
         task: &Task,
@@ -239,6 +272,9 @@ impl CloudConvertClient {
         let form = Self::upload_form(task)?;
         let mut multipart = multipart::Form::new();
         for (key, value) in &form.parameters {
+            if value.is_null() {
+                continue;
+            }
             multipart = multipart.text(key.clone(), form_value(value));
         }
         multipart = multipart.part(field_name.to_string(), part);
@@ -377,7 +413,15 @@ impl CloudConvertClient {
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
-        let attempts = policy.max_attempts_value().max(1);
+        let idempotent = build()
+            .build()
+            .map(|request| Self::is_idempotent_method(request.method()))
+            .unwrap_or(false);
+        let attempts = if idempotent {
+            policy.max_attempts_value().max(1)
+        } else {
+            1
+        };
         let mut delay = policy.initial_delay_value();
 
         for attempt in 1..=attempts {
@@ -393,8 +437,7 @@ impl CloudConvertClient {
                             .headers()
                             .get("retry-after")
                             .and_then(|value| value.to_str().ok())
-                            .and_then(|value| value.parse::<u64>().ok())
-                            .map(Duration::from_secs)
+                            .and_then(parse_retry_after)
                     });
                     let sleep_for = retry_after
                         .flatten()
@@ -420,6 +463,19 @@ impl CloudConvertClient {
     #[cfg(feature = "retry")]
     fn is_retryable_status(status: u16) -> bool {
         matches!(status, 429 | 500 | 502 | 503 | 504)
+    }
+
+    #[cfg(feature = "retry")]
+    fn is_idempotent_method(method: &Method) -> bool {
+        matches!(
+            *method,
+            Method::GET
+                | Method::HEAD
+                | Method::OPTIONS
+                | Method::TRACE
+                | Method::PUT
+                | Method::DELETE
+        )
     }
 
     #[cfg(feature = "retry")]
@@ -523,6 +579,7 @@ fn api_url(base: &Url, path: &str) -> Result<Url> {
     base.join(path).map_err(Error::Url)
 }
 
+// Rejects path segments that could escape the configured API base URL.
 fn validate_api_path(path: &str) -> Result<()> {
     let valid = !path.is_empty()
         && path.split('/').all(|segment| {
@@ -539,6 +596,7 @@ fn validate_api_path(path: &str) -> Result<()> {
     }
 }
 
+// Resource ids are interpolated into URL paths, so only safe tokens are accepted.
 fn resource_id(id: &str) -> Result<&str> {
     let valid = !id.is_empty()
         && id
@@ -554,10 +612,26 @@ fn resource_id(id: &str) -> Result<&str> {
 
 #[cfg(feature = "retry")]
 fn next_retry_delay(current: Duration, policy: &crate::RetryPolicy) -> Duration {
-    let next = current.mul_f64(policy.backoff_factor_value());
-    next.min(policy.max_delay_value())
+    let max = policy.max_delay_value();
+    let scaled = current.as_secs_f64() * policy.backoff_factor_value();
+    Duration::try_from_secs_f64(scaled).unwrap_or(max).min(max)
 }
 
+#[cfg(feature = "retry")]
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let target = httpdate::parse_http_date(value).ok()?;
+    Some(
+        target
+            .duration_since(SystemTime::now())
+            .unwrap_or(Duration::ZERO),
+    )
+}
+
+/// Job REST endpoints, including sync wait and optional Socket.IO wait helpers.
 #[derive(Clone, Debug)]
 pub struct JobsResource {
     client: CloudConvertClient,
@@ -576,6 +650,7 @@ impl JobsResource {
         Ok(CloudConvertClient::into_page(response))
     }
 
+    /// Creates a job and returns immediately with the current job state.
     pub async fn create(&self, request: impl Into<JobCreateRequest>) -> Result<Job> {
         Ok(self.create_response(request).await?.data)
     }
@@ -589,10 +664,14 @@ impl JobsResource {
             .await
     }
 
+    /// Creates a job on the sync API host and blocks until it reaches a terminal state.
     pub async fn create_and_wait(&self, request: impl Into<JobCreateRequest>) -> Result<Job> {
         Ok(self.create_and_wait_response(request).await?.data)
     }
 
+    /// Creates a job, then waits for completion via Socket.IO when still in flight.
+    ///
+    /// Requires the `socket` crate feature.
     #[cfg(feature = "socket")]
     pub async fn create_and_wait_socket(
         &self,
@@ -668,10 +747,14 @@ impl JobsResource {
             .await
     }
 
+    /// Blocks on the sync API host until the job reaches a terminal state.
     pub async fn wait(&self, id: impl AsRef<str>) -> Result<Job> {
         Ok(self.wait_response(id).await?.data)
     }
 
+    /// Waits for a terminal job event over Socket.IO, falling back to REST on gaps.
+    ///
+    /// Requires the `socket` crate feature.
     #[cfg(feature = "socket")]
     pub async fn wait_socket(&self, id: impl AsRef<str>) -> Result<Job> {
         let id = resource_id(id.as_ref())?.to_string();
@@ -683,20 +766,32 @@ impl JobsResource {
         }
 
         loop {
-            let event = socket
-                .next_event()
-                .await
-                .ok_or_else(|| Error::Socket(format!("socket closed before job {id} completed")))?;
+            let event = match socket.next_event().await {
+                Some(event) => event,
+                None => {
+                    let current = self.get(&id).await?;
+                    if current.is_terminal() {
+                        return Ok(current);
+                    }
+                    return Err(Error::Socket(format!(
+                        "socket closed before job {id} completed"
+                    )));
+                }
+            };
 
             if !event.is_job_event() || !event.is_terminal() {
                 continue;
             }
 
             let job = match event.job()? {
-                Some(job) if job.id == id => job,
+                Some(job) if job.id == id && job.is_terminal() => job,
+                Some(job) if job.id == id => self.get(&id).await?,
                 Some(_) => continue,
                 None => self.get(&id).await?,
             };
+            if !job.is_terminal() {
+                continue;
+            }
 
             let _ = socket.disconnect().await;
             return Ok(job);
@@ -766,6 +861,7 @@ impl JobsResource {
     }
 }
 
+/// Standalone task REST endpoints and optional Socket.IO wait helpers.
 #[derive(Clone, Debug)]
 pub struct TasksResource {
     client: CloudConvertClient,
@@ -829,10 +925,14 @@ impl TasksResource {
             .await
     }
 
+    /// Blocks on the sync API host until the task reaches a terminal state.
     pub async fn wait(&self, id: impl AsRef<str>) -> Result<Task> {
         Ok(self.wait_response(id).await?.data)
     }
 
+    /// Waits for a terminal task event over Socket.IO, falling back to REST on gaps.
+    ///
+    /// Requires the `socket` crate feature.
     #[cfg(feature = "socket")]
     pub async fn wait_socket(&self, id: impl AsRef<str>) -> Result<Task> {
         let id = resource_id(id.as_ref())?.to_string();
@@ -847,19 +947,32 @@ impl TasksResource {
         }
 
         loop {
-            let event = socket.next_event().await.ok_or_else(|| {
-                Error::Socket(format!("socket closed before task {id} completed"))
-            })?;
+            let event = match socket.next_event().await {
+                Some(event) => event,
+                None => {
+                    let current = self.get(&id).await?;
+                    if current.is_terminal() {
+                        return Ok(current);
+                    }
+                    return Err(Error::Socket(format!(
+                        "socket closed before task {id} completed"
+                    )));
+                }
+            };
 
             if !event.is_task_event() || !event.is_terminal() {
                 continue;
             }
 
             let task = match event.task()? {
-                Some(task) if task.id == id => task,
+                Some(task) if task.id == id && task.is_terminal() => task,
+                Some(task) if task.id == id => self.get(&id).await?,
                 Some(_) => continue,
                 None => self.get(&id).await?,
             };
+            if !task.is_terminal() {
+                continue;
+            }
 
             let _ = socket.disconnect().await;
             return Ok(task);
@@ -932,6 +1045,7 @@ impl TasksResource {
     }
 }
 
+/// Account endpoints and helpers that resolve user-scoped Socket.IO channels.
 #[derive(Clone, Debug)]
 pub struct UsersResource {
     client: CloudConvertClient,
@@ -997,6 +1111,7 @@ impl UsersResource {
     }
 }
 
+/// Webhook registration endpoints for the authenticated account.
 #[derive(Clone, Debug)]
 pub struct WebhooksResource {
     client: CloudConvertClient,
@@ -1036,6 +1151,7 @@ impl WebhooksResource {
     }
 }
 
+/// Operations metadata listing engines, formats, and documented options.
 #[derive(Clone, Debug)]
 pub struct OperationsResource {
     client: CloudConvertClient,
@@ -1117,4 +1233,84 @@ fn unique_suffix() -> String {
         .unwrap_or_default();
 
     format!("{}-{nanos}", std::process::id())
+}
+
+#[cfg(all(test, feature = "retry"))]
+mod retry_after_tests {
+    use super::parse_retry_after;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn parses_delta_seconds() {
+        assert_eq!(parse_retry_after("30"), Some(Duration::from_secs(30)));
+        assert_eq!(parse_retry_after("  5 "), Some(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn parses_http_date_in_the_future() {
+        let target = SystemTime::now() + Duration::from_secs(120);
+        let header = httpdate::fmt_http_date(target);
+        let delay = parse_retry_after(&header).expect("http-date should parse");
+        assert!(delay <= Duration::from_secs(121));
+        assert!(delay >= Duration::from_secs(115));
+    }
+
+    #[test]
+    fn http_date_in_the_past_yields_zero() {
+        let target = SystemTime::now() - Duration::from_secs(120);
+        let header = httpdate::fmt_http_date(target);
+        assert_eq!(parse_retry_after(&header), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn rejects_unparseable_value() {
+        assert_eq!(parse_retry_after("not-a-date"), None);
+    }
+
+    #[test]
+    fn backoff_factor_rejects_non_finite_values() {
+        use crate::RetryPolicy;
+        assert_eq!(
+            RetryPolicy::default()
+                .backoff_factor(f64::INFINITY)
+                .backoff_factor_value(),
+            1.0
+        );
+        assert_eq!(
+            RetryPolicy::default()
+                .backoff_factor(f64::NAN)
+                .backoff_factor_value(),
+            1.0
+        );
+        assert_eq!(
+            RetryPolicy::default()
+                .backoff_factor(0.25)
+                .backoff_factor_value(),
+            1.0
+        );
+        assert_eq!(
+            RetryPolicy::default()
+                .backoff_factor(3.0)
+                .backoff_factor_value(),
+            3.0
+        );
+    }
+
+    #[test]
+    fn next_retry_delay_saturates_instead_of_panicking() {
+        use super::next_retry_delay;
+        use crate::RetryPolicy;
+
+        let policy = RetryPolicy::default()
+            .max_delay(Duration::from_secs(10))
+            .backoff_factor(1e308);
+        let delay = next_retry_delay(Duration::from_secs(u64::MAX / 2), &policy);
+        assert_eq!(delay, Duration::from_secs(10));
+
+        let policy = RetryPolicy::default()
+            .max_delay(Duration::from_secs(10))
+            .backoff_factor(2.0);
+        let delay = next_retry_delay(Duration::from_secs(1), &policy);
+        assert_eq!(delay, Duration::from_secs(2));
+    }
 }

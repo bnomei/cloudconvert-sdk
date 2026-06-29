@@ -1,10 +1,17 @@
+//! CloudConvert Socket.IO channel names, subscriptions, and event decoding.
+//!
+//! Channel helpers build the `private-*` names CloudConvert expects. With the
+//! `socket` feature enabled, [`CloudConvertSocket`] manages subscriptions and
+//! exposes typed job and task lifecycle events for wait helpers in
+//! [`crate::JobsResource`] and [`crate::TasksResource`].
+
 use std::{borrow::Cow, collections::BTreeMap, fmt};
 
 #[cfg(feature = "socket")]
 use futures_util::{FutureExt, future::BoxFuture};
 #[cfg(feature = "socket")]
 use rust_socketio::{
-    Payload,
+    Event, Payload,
     asynchronous::{Client as SocketIoClient, ClientBuilder as SocketIoClientBuilder},
 };
 use serde::Serialize;
@@ -21,6 +28,7 @@ use crate::{
     jobs::{Job, Task},
 };
 
+/// Socket.IO channel selector for job, task, or user-scoped event streams.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum SocketChannel {
@@ -67,6 +75,7 @@ impl SocketChannel {
         }
     }
 
+    /// Returns the `private-*` channel name CloudConvert expects at subscribe time.
     pub fn name(&self) -> Cow<'_, str> {
         match self {
             Self::Job { job_id } => Cow::Owned(format!("private-job.{job_id}")),
@@ -120,6 +129,7 @@ impl SocketChannel {
     }
 }
 
+/// Job lifecycle event names emitted over Socket.IO.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum JobSocketEvent {
@@ -150,6 +160,7 @@ impl JobSocketEvent {
     }
 }
 
+/// Task lifecycle event names emitted over Socket.IO.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TaskSocketEvent {
@@ -180,6 +191,7 @@ impl TaskSocketEvent {
     }
 }
 
+/// Parsed Socket.IO event name, including unknown custom events.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum SocketEventKind {
@@ -217,6 +229,7 @@ impl SocketEventKind {
     }
 }
 
+/// Bearer-authenticated subscribe payload sent to the Socket.IO server.
 #[derive(Clone, Serialize)]
 pub struct SocketSubscription {
     channel: String,
@@ -264,6 +277,7 @@ impl fmt::Debug for SocketAuth {
     }
 }
 
+/// Socket.IO base URL for production or sandbox environments.
 pub fn socket_base_url(sandbox: bool) -> &'static str {
     if sandbox {
         "https://socketio.sandbox.cloudconvert.com"
@@ -272,6 +286,7 @@ pub fn socket_base_url(sandbox: bool) -> &'static str {
     }
 }
 
+/// One decoded Socket.IO event with optional channel metadata and JSON payload.
 #[cfg(feature = "socket")]
 #[derive(Clone, Debug)]
 pub struct SocketEvent {
@@ -369,6 +384,9 @@ impl SocketEvent {
     }
 }
 
+/// Managed Socket.IO connection that buffers job and task lifecycle events.
+///
+/// Requires the `socket` crate feature.
 #[cfg(feature = "socket")]
 pub struct CloudConvertSocket {
     client: SocketIoClient,
@@ -388,6 +406,7 @@ impl fmt::Debug for CloudConvertSocket {
 
 #[cfg(feature = "socket")]
 impl CloudConvertSocket {
+    /// Connects to Socket.IO and subscribes to the provided channels.
     pub async fn connect(
         base_url: impl Into<String>,
         subscriptions: impl IntoIterator<Item = SocketSubscription>,
@@ -401,7 +420,12 @@ impl CloudConvertSocket {
         buffer: usize,
     ) -> Result<Self> {
         let (sender, receiver) = mpsc::channel(buffer.max(1));
-        let client = socket_client_builder(base_url.into(), sender)
+        let subscriptions: Vec<SocketSubscription> = subscriptions.into_iter().collect();
+        let payloads = subscriptions
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<Value>, _>>()?;
+        let client = socket_client_builder(base_url.into(), sender, payloads)
             .connect()
             .await
             .map_err(socket_error)?;
@@ -422,6 +446,7 @@ impl CloudConvertSocket {
             .map_err(socket_error)
     }
 
+    /// Awaits the next buffered Socket.IO event, if any.
     pub async fn next_event(&mut self) -> Option<SocketEvent> {
         self.receiver.recv().await
     }
@@ -435,6 +460,7 @@ impl CloudConvertSocket {
 fn socket_client_builder(
     base_url: String,
     sender: mpsc::Sender<SocketEvent>,
+    subscribe_payloads: Vec<Value>,
 ) -> SocketIoClientBuilder {
     let mut builder = SocketIoClientBuilder::new(base_url)
         .reconnect(true)
@@ -453,7 +479,23 @@ fn socket_client_builder(
         builder = builder.on(event, socket_event_callback(event, sender.clone()));
     }
 
-    builder
+    // CloudConvert drops channel subscriptions on reconnect, so resubscribe on connect.
+    builder.on(Event::Connect, resubscribe_callback(subscribe_payloads))
+}
+
+#[cfg(feature = "socket")]
+fn resubscribe_callback(
+    subscribe_payloads: Vec<Value>,
+) -> impl FnMut(Payload, SocketIoClient) -> BoxFuture<'static, ()> + Send + Sync + 'static {
+    move |_payload, client| {
+        let subscribe_payloads = subscribe_payloads.clone();
+        async move {
+            for payload in subscribe_payloads {
+                let _ = client.emit("subscribe", payload).await;
+            }
+        }
+        .boxed()
+    }
 }
 
 #[cfg(feature = "socket")]

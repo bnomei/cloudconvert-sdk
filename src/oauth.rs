@@ -1,3 +1,9 @@
+//! CloudConvert OAuth authorization and token exchange helpers.
+//!
+//! [`OAuthClient`] builds authorization URLs and exchanges authorization codes
+//! or refresh tokens for [`OAuthTokenResponse`] values that can seed a
+//! [`CloudConvertClient`] through [`OAuthTokenResponse::client_builder`].
+
 use std::{collections::BTreeMap, fmt};
 
 use reqwest::header::CONTENT_TYPE;
@@ -13,6 +19,7 @@ use crate::{
 const OAUTH_AUTHORIZE_URL: &str = "https://cloudconvert.com/oauth/authorize";
 const OAUTH_TOKEN_URL: &str = "https://cloudconvert.com/oauth/token";
 
+/// OAuth scope token requested during authorization.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OAuthScope {
@@ -68,6 +75,7 @@ impl Serialize for OAuthScope {
     }
 }
 
+/// OAuth client used to start authorization flows and exchange tokens.
 #[derive(Clone)]
 pub struct OAuthClient {
     client_id: String,
@@ -114,6 +122,7 @@ impl OAuthClient {
         &self.token_url
     }
 
+    /// Builds an authorization-code flow URL for the given redirect URI and scopes.
     pub fn authorization_code_url(
         &self,
         redirect_uri: impl AsRef<str>,
@@ -148,6 +157,7 @@ impl OAuthClient {
         self.authorization_url("token", redirect_uri.as_ref(), scopes, Some(state.into()))
     }
 
+    /// Exchanges an authorization code for access and optional refresh tokens.
     pub async fn exchange_code(
         &self,
         code: impl Into<String>,
@@ -163,6 +173,7 @@ impl OAuthClient {
         .await
     }
 
+    /// Refreshes an access token using a stored refresh token.
     pub async fn refresh_access_token(
         &self,
         refresh_token: &OAuthRefreshToken,
@@ -242,6 +253,7 @@ impl fmt::Debug for OAuthClient {
     }
 }
 
+/// Token payload returned by CloudConvert OAuth token endpoints.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct OAuthTokenResponse {
@@ -266,6 +278,7 @@ impl OAuthTokenResponse {
         self.access_token
     }
 
+    /// Starts a [`CloudConvertClient`] builder authenticated with this access token.
     pub fn client_builder(&self) -> ClientBuilder {
         CloudConvertClient::builder_with_access_token(self.access_token.clone())
     }

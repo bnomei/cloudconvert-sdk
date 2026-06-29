@@ -91,6 +91,31 @@ fn builder_resolves_default_sandbox_region_and_custom_urls() {
         custom_region.config().sync_base_url().as_str(),
         "https://ap-southeast.sync.api.cloudconvert.com/v2/"
     );
+
+    let unslashed = CloudConvertClient::builder(ApiKey::new("cc_test_fake_secret_key"))
+        .with_base_urls(
+            Url::parse("https://api.example.test/v2").unwrap(),
+            Url::parse("https://sync.example.test/v2").unwrap(),
+        )
+        .build()
+        .unwrap();
+    assert_eq!(
+        unslashed.config().api_base_url().as_str(),
+        "https://api.example.test/v2/"
+    );
+    assert_eq!(
+        unslashed
+            .config()
+            .api_base_url()
+            .join("jobs")
+            .unwrap()
+            .as_str(),
+        "https://api.example.test/v2/jobs"
+    );
+    assert_eq!(
+        unslashed.config().sync_base_url().as_str(),
+        "https://sync.example.test/v2/"
+    );
 }
 
 #[test]
