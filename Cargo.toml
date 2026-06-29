@@ -1,6 +1,6 @@
 [package]
 name = "cloudconvert-sdk"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.87"
 description = "Async Rust SDK primitives for the CloudConvert API v2."
