@@ -797,3 +797,250 @@ fn value_type(value: &Value) -> &'static str {
         Value::Object(_) => "dictionary",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structural_task_fields_are_operation_specific() {
+        const FILE_PROCESSING_FIELDS: &[&str] = &[
+            "input",
+            "input_format",
+            "output_format",
+            "engine",
+            "engine_version",
+            "filename",
+            "timeout",
+        ];
+        const INPUT_PROCESSING_FIELDS: &[&str] = &[
+            "input",
+            "input_format",
+            "engine",
+            "engine_version",
+            "filename",
+            "timeout",
+        ];
+        const OUTPUT_PROCESSING_FIELDS: &[&str] = &[
+            "input",
+            "output_format",
+            "engine",
+            "engine_version",
+            "filename",
+            "timeout",
+        ];
+        const PDF_FIELDS: &[&str] = &["input", "engine", "engine_version", "filename", "timeout"];
+
+        let cases: &[(&str, &[&str])] = &[
+            ("import/url", &["url", "filename", "headers"]),
+            ("import/upload", &["redirect"]),
+            ("import/base64", &["file", "filename"]),
+            ("import/raw", &["file", "filename"]),
+            (
+                "import/s3",
+                &[
+                    "bucket",
+                    "region",
+                    "endpoint",
+                    "key",
+                    "key_prefix",
+                    "access_key_id",
+                    "secret_access_key",
+                    "session_token",
+                    "filename",
+                ],
+            ),
+            (
+                "import/azure/blob",
+                &[
+                    "storage_account",
+                    "storage_access_key",
+                    "sas_token",
+                    "container",
+                    "blob",
+                    "blob_prefix",
+                    "filename",
+                ],
+            ),
+            (
+                "import/google-cloud-storage",
+                &[
+                    "project_id",
+                    "bucket",
+                    "client_email",
+                    "private_key",
+                    "file",
+                    "file_prefix",
+                    "filename",
+                ],
+            ),
+            (
+                "import/openstack",
+                &[
+                    "auth_url",
+                    "username",
+                    "password",
+                    "region",
+                    "container",
+                    "file",
+                    "file_prefix",
+                    "filename",
+                ],
+            ),
+            (
+                "import/sftp",
+                &[
+                    "host",
+                    "port",
+                    "username",
+                    "password",
+                    "private_key",
+                    "file",
+                    "path",
+                    "filename",
+                ],
+            ),
+            ("convert", FILE_PROCESSING_FIELDS),
+            ("optimize", INPUT_PROCESSING_FIELDS),
+            ("metadata", INPUT_PROCESSING_FIELDS),
+            ("watermark", INPUT_PROCESSING_FIELDS),
+            (
+                "capture-website",
+                &[
+                    "url",
+                    "output_format",
+                    "engine",
+                    "engine_version",
+                    "filename",
+                    "timeout",
+                ],
+            ),
+            ("thumbnail", FILE_PROCESSING_FIELDS),
+            (
+                "metadata/write",
+                &[
+                    "input",
+                    "input_format",
+                    "engine",
+                    "engine_version",
+                    "metadata",
+                    "filename",
+                    "timeout",
+                ],
+            ),
+            ("merge", OUTPUT_PROCESSING_FIELDS),
+            ("archive", OUTPUT_PROCESSING_FIELDS),
+            (
+                "command",
+                &[
+                    "input",
+                    "engine",
+                    "command",
+                    "arguments",
+                    "engine_version",
+                    "capture_output",
+                    "timeout",
+                ],
+            ),
+            ("pdf/a", PDF_FIELDS),
+            ("pdf/x", PDF_FIELDS),
+            ("pdf/ocr", PDF_FIELDS),
+            ("pdf/encrypt", PDF_FIELDS),
+            ("pdf/decrypt", PDF_FIELDS),
+            ("pdf/split-pages", PDF_FIELDS),
+            ("pdf/extract-pages", PDF_FIELDS),
+            ("pdf/rotate-pages", PDF_FIELDS),
+            ("export/url", &["input", "inline", "archive_multiple_files"]),
+            (
+                "export/s3",
+                &[
+                    "input",
+                    "bucket",
+                    "region",
+                    "endpoint",
+                    "key",
+                    "key_prefix",
+                    "access_key_id",
+                    "secret_access_key",
+                    "session_token",
+                ],
+            ),
+            (
+                "export/azure/blob",
+                &[
+                    "input",
+                    "storage_account",
+                    "storage_access_key",
+                    "sas_token",
+                    "container",
+                    "blob",
+                    "blob_prefix",
+                ],
+            ),
+            (
+                "export/google-cloud-storage",
+                &[
+                    "input",
+                    "project_id",
+                    "bucket",
+                    "client_email",
+                    "private_key",
+                    "file",
+                    "file_prefix",
+                ],
+            ),
+            (
+                "export/openstack",
+                &[
+                    "input",
+                    "auth_url",
+                    "username",
+                    "password",
+                    "region",
+                    "container",
+                    "file",
+                    "file_prefix",
+                ],
+            ),
+            (
+                "export/sftp",
+                &[
+                    "input",
+                    "host",
+                    "port",
+                    "username",
+                    "password",
+                    "private_key",
+                    "file",
+                    "path",
+                ],
+            ),
+            ("export/upload", &["input", "url", "headers"]),
+            ("future/custom-op", FILE_PROCESSING_FIELDS),
+        ];
+
+        for &(operation, fields) in cases {
+            assert!(is_structural_task_field(operation, "ignore_error"));
+            for &field in fields {
+                assert!(
+                    is_structural_task_field(operation, field),
+                    "{operation} should accept structural field {field}"
+                );
+            }
+        }
+
+        for &(operation, field) in &[
+            ("convert", "url"),
+            ("convert", "bucket"),
+            ("import/url", "bucket"),
+            ("export/s3", "url"),
+            ("future/custom-op", "url"),
+            ("future/custom-op", "not_a_real_field"),
+        ] {
+            assert!(
+                !is_structural_task_field(operation, field),
+                "{operation} should reject unrelated field {field}"
+            );
+        }
+    }
+}
