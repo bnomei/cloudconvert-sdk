@@ -11,37 +11,96 @@
 Async Rust SDK primitives for the [CloudConvert](https://cloudconvert.com)
 API v2.
 
-The crate is built for Tokio applications that need to create CloudConvert jobs,
-upload files, wait for results, download `export/url` outputs, inspect operation
-metadata, verify webhooks, or use OAuth access tokens without hand-building
-every request.
+`cloudconvert-sdk` gives Tokio applications typed CloudConvert clients, job and
+task builders, upload and download helpers, operation metadata validation,
+OAuth 2.0 flows, webhook signature helpers, signed job URLs, and optional retry
+and Socket.IO support.
 
-This is an unofficial library. For service behavior, scopes, formats, engines,
-regions, sandbox usage, and operation-specific options, use the
+This is an unofficial library. Use the
 [official CloudConvert API documentation](https://cloudconvert.com/docs) and the
-[CloudConvert Job Builder](https://cloudconvert.com/job-builder).
+[CloudConvert Job Builder](https://cloudconvert.com/job-builder) as the source
+of truth for service behavior, scopes, formats, engines, regions, sandbox usage,
+and operation-specific options.
+
+## Requirements
+
+- Rust 1.87 or newer.
+- Tokio for async API calls.
+- A CloudConvert API key for live API calls. Payload builders, examples, and
+  most tests run offline without credentials.
 
 ## Installation
 
+Add the crate to your application:
+
 ```toml
 [dependencies]
-cloudconvert-sdk = "0.2"
+cloudconvert-sdk = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 The crate is a library only. It does not install a binary.
 
-## Quick Start
+Default features are empty. Enable optional features only when you need them:
 
-Create an API key in the
-[CloudConvert dashboard](https://cloudconvert.com/dashboard/api/v2/keys) and
-export it:
-
-```sh
-export CLOUDCONVERT_API_KEY=...
+```toml
+cloudconvert-sdk = { version = "0.3", features = ["retry", "socket"] }
 ```
 
-Then build a job, wait for it, and download the `export/url` result:
+| Feature | Adds |
+| --- | --- |
+| `retry` | `RetryPolicy` and automatic retry for idempotent CloudConvert API requests. |
+| `socket` | Socket.IO clients, streams, and managed socket wait helpers. |
+
+## Configure the client
+
+Create an API key in the
+[CloudConvert dashboard](https://cloudconvert.com/dashboard/api/v2/keys), then
+store it outside your source code:
+
+```sh
+export CLOUDCONVERT_API_KEY=<API_KEY>
+```
+
+Build a client from the environment:
+
+```rust
+use cloudconvert_sdk::{ApiKey, CloudConvertClient};
+
+let client = CloudConvertClient::builder(ApiKey::from_env()?).build()?;
+```
+
+The builder also supports sandbox mode, regional production hosts, custom base
+URLs, custom `reqwest` clients, and transport timeouts:
+
+```rust
+use std::time::Duration;
+
+use cloudconvert_sdk::{ApiKey, CloudConvertClient, Region, TransportConfig};
+
+let client = CloudConvertClient::builder(ApiKey::from_env()?)
+    .region(Region::EuCentral)
+    .transport_config(
+        TransportConfig::default()
+            .connect_timeout(Duration::from_secs(10))
+            .request_timeout(Duration::from_secs(120))
+            .user_agent("my-app/1.0"),
+    )
+    .build()?;
+```
+
+Use `.sandbox(true)` to route requests to CloudConvert sandbox hosts. Use
+`Region::EuCentral`, `Region::UsEast`, or `Region::Custom(...)` for regional
+production API hosts. Use `.with_base_urls(...)` for tests, proxies, or
+non-standard deployments.
+
+Secret-bearing types such as `ApiKey`, `OAuthAccessToken`, `OAuthRefreshToken`,
+`OAuthClientSecret`, and `SigningSecret` redact their `Debug` output.
+
+## Quick start
+
+This example creates a URL import job, converts a DOCX file to PDF, waits for
+the job to finish, and downloads each `export/url` result.
 
 ```rust
 use cloudconvert_sdk::{ApiKey, CloudConvertClient, FileExtension, JobCreateRequest};
@@ -70,15 +129,19 @@ async fn main() -> cloudconvert_sdk::Result<()> {
 }
 ```
 
-For production workflows, prefer CloudConvert webhooks or Socket.io waits over
+Expected result:
+
+```txt
+downloaded <bytes> bytes as <filename>
+```
+
+For production workflows, prefer CloudConvert webhooks or Socket.IO waits over
 long blocking waits.
 
-## Job Builders
+## Build jobs
 
 CloudConvert jobs serialize tasks as an object keyed by task name. The SDK
-generates those names unless you choose to provide explicit names.
-
-### Linear Jobs
+generates task names unless you provide explicit names.
 
 Use `JobCreateRequest::linear()` when every task feeds into the next task:
 
@@ -96,13 +159,14 @@ fn build_request() -> cloudconvert_sdk::Result<JobCreateRequest> {
 }
 ```
 
-Linear methods that infer their input from the previous task return a typed
-`Error::InvalidBuilderState` if they are called before any source task exists.
+Linear methods that infer their input from the previous task return
+`Error::InvalidBuilderState` when they are called before a source task exists.
 
-Use `*_with(...)` methods when a task needs options but the job is still
-serial:
+Use `*_with(...)` methods when a serial task needs options:
 
 ```rust
+use cloudconvert_sdk::{FileExtension, JobCreateRequest};
+
 fn build_request() -> cloudconvert_sdk::Result<JobCreateRequest> {
     let request = JobCreateRequest::linear()
         .import_url_with("https://example.test/input.docx", |task| {
@@ -120,11 +184,9 @@ fn build_request() -> cloudconvert_sdk::Result<JobCreateRequest> {
 }
 ```
 
-### Graph Jobs
-
 Use `JobCreateRequest::graph(|job| ...)` when a job branches, joins multiple
-inputs, or needs to reference a non-adjacent task. Each graph method returns a
-`TaskName` handle.
+inputs, or references a non-adjacent task. Each graph method returns a
+`TaskName` handle:
 
 ```rust
 use cloudconvert_sdk::{FileExtension, JobCreateRequest};
@@ -188,9 +250,15 @@ let request = JobCreateRequest::graph(|job| {
 
 When the task name itself matters, use `JobBuilder::task(...)`,
 `JobBuilder::add_named_task(...)`, or `JobGraphBuilder::add_named_task(...)`.
-For operations not yet typed by the SDK, use `TaskRequest::custom(...)`.
+For operations not yet typed by this SDK, use `TaskRequest::custom(...)`.
 
-## File Extensions
+Typed builders cover imports from URL, upload, base64, raw content, S3, Azure
+Blob, Google Cloud Storage, OpenStack, and SFTP; conversion, optimization,
+watermarking, website capture, thumbnails, metadata, metadata writes, merge,
+archive, command, and PDF tasks; and exports to URL, S3, Azure Blob, Google
+Cloud Storage, OpenStack, SFTP, and upload callbacks.
+
+## File extensions
 
 Use `FileExtension` for known CloudConvert format tokens:
 
@@ -205,7 +273,7 @@ Format setters still accept strings for forward compatibility. Strings are
 normalized by trimming leading dots and lowercasing ASCII, so `.PDF` and `PDF`
 serialize as `pdf`.
 
-## Uploads And Downloads
+## Upload and download files
 
 Use `import/upload` when your application already has the input file locally.
 The job creation response contains the signed upload form; the SDK handles the
@@ -238,6 +306,8 @@ async fn run() -> cloudconvert_sdk::Result<()> {
     client.upload_path(&upload_task, "input.txt").await?;
 
     let finished = client.jobs().wait(&job.id).await?;
+    tokio::fs::create_dir_all("downloads").await?;
+
     for file in finished.export_urls() {
         if let Some(url) = &file.url {
             let filename = Path::new(&file.filename)
@@ -255,17 +325,17 @@ async fn run() -> cloudconvert_sdk::Result<()> {
 Download helpers never attach CloudConvert bearer credentials to signed storage
 URLs. Upload helpers submit to the signed form action returned by CloudConvert.
 
-## API Overview
+## API overview
 
 The crate exports typed resource clients from `CloudConvertClient`:
 
-- `jobs()` creates, lists, fetches, waits for, redirects, and deletes jobs.
-- `tasks()` creates standalone tasks, lists, fetches, waits for, cancels,
-  retries, and deletes tasks.
-- `operations()` lists operation metadata, options, engine versions, and can
-  validate task payloads against returned metadata.
-- `users()` reads the authenticated user.
-- `webhooks()` creates, lists, and deletes webhooks.
+| Client method | Purpose |
+| --- | --- |
+| `jobs()` | Create, list, fetch, wait for, redirect, and delete jobs. |
+| `tasks()` | Create standalone tasks, list, fetch, wait for, cancel, retry, and delete tasks. |
+| `operations()` | List operation metadata, options, and engine versions; validate task payloads against returned metadata. |
+| `users()` | Read the authenticated user and, with `socket`, open user-scoped event streams. |
+| `webhooks()` | Create, list, and delete webhooks. |
 
 Useful helpers:
 
@@ -275,11 +345,7 @@ Useful helpers:
 - `sign_payload(...)` and `verify_signature(...)` for webhook signatures.
 - `sign_job_url(...)` for signed job-template URLs.
 - `socket_base_url(...)`, `SocketChannel`, `JobSocketEvent`, and
-  `TaskSocketEvent` for Socket.io payloads.
-
-Client setup supports API keys, OAuth access tokens, sandbox mode, custom
-regions, custom base URLs, custom reqwest clients, transport timeouts, and the
-optional `retry` and `socket` features.
+  `TaskSocketEvent` for Socket.IO payloads.
 
 ## OAuth 2.0
 
@@ -310,17 +376,38 @@ async fn run() -> cloudconvert_sdk::Result<()> {
 }
 ```
 
-`OAuthAccessToken`, `OAuthRefreshToken`, and `OAuthClientSecret` redact debug
-output. OAuth-backed clients use the same SDK resources and Socket.io helpers as
+`OAuthAccessToken::from_env()`, `OAuthRefreshToken::from_env()`, and
+`OAuthClientSecret::from_env()` read `CLOUDCONVERT_OAUTH_ACCESS_TOKEN`,
+`CLOUDCONVERT_OAUTH_REFRESH_TOKEN`, and `CLOUDCONVERT_OAUTH_CLIENT_SECRET`.
+OAuth-backed clients use the same SDK resources and Socket.IO helpers as
 API-key clients.
 
-## Operation Metadata
+## Webhooks and signed job URLs
+
+Use `verify_signature(...)` to check inbound CloudConvert webhook payloads with
+your webhook signing secret:
+
+```rust
+use cloudconvert_sdk::{SigningSecret, verify_signature};
+
+let valid = verify_signature(
+    br#"{"event":"job.finished"}"#,
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    &SigningSecret::new("webhook-signing-secret"),
+)?;
+```
+
+Use `sign_payload(...)` for tests that need CloudConvert-compatible webhook
+signatures. Use `sign_job_url(...)` when you embed a signed job template into a
+hosted CloudConvert job URL.
+
+## Operation metadata
 
 For metadata-driven integrations, call `operations().list(...)` with
 `include_options()` or `include_options_and_engine_versions()`:
 
 ```rust
-use cloudconvert_sdk::{ConvertTask, OperationListQuery, TaskRequest};
+use cloudconvert_sdk::{ConvertTask, FileExtension, OperationListQuery, TaskRequest};
 
 async fn validate(client: cloudconvert_sdk::CloudConvertClient) -> cloudconvert_sdk::Result<()> {
     let operation = client.operations().list(
@@ -331,7 +418,10 @@ async fn validate(client: cloudconvert_sdk::CloudConvertClient) -> cloudconvert_
             .include_options_and_engine_versions(),
     ).await?.remove(0);
 
-    let task = TaskRequest::from(ConvertTask::new("import-file", "pdf"));
+    let task = TaskRequest::from(
+        ConvertTask::new("import-file", FileExtension::Pdf)
+            .input_format(FileExtension::Docx),
+    );
     operation.validate_task(&task).expect("task should match operation metadata");
     Ok(())
 }
@@ -340,14 +430,14 @@ async fn validate(client: cloudconvert_sdk::CloudConvertClient) -> cloudconvert_
 Use `option(...)` builder methods, `extra` maps, or `TaskRequest::custom(...)`
 for operation-specific options that are not yet typed by this SDK.
 
-### Recorded Metadata Fixtures
+### Recorded metadata fixtures
 
 Normal CI parses committed fixtures from `tests/fixtures/cloudconvert/` and does
 not require CloudConvert credentials. Refresh those fixtures only when you want
 to intentionally review upstream metadata drift.
 
 ```sh
-export CLOUDCONVERT_API_KEY=...
+export CLOUDCONVERT_API_KEY=<API_KEY>
 
 curl --get "https://api.cloudconvert.com/v2/operations" \
   --header "Authorization: Bearer ${CLOUDCONVERT_API_KEY}" \
@@ -382,7 +472,7 @@ instead of weakening existing checks.
 Automatic retry is off by default. Enable the optional feature and set a policy:
 
 ```toml
-cloudconvert-sdk = { version = "0.2", features = ["retry"] }
+cloudconvert-sdk = { version = "0.3", features = ["retry"] }
 ```
 
 ```rust
@@ -404,18 +494,18 @@ let client = CloudConvertClient::builder(ApiKey::from_env()?)
     .build()?;
 ```
 
-Retry covers CloudConvert API and synchronous API requests for transient
-statuses `429`, `500`, `502`, `503`, and `504`, plus connect and timeout
-errors. Signed `import/upload` form submissions and `export/url` downloads stay
-outside that retry boundary.
+Retry applies only to idempotent CloudConvert API requests. It retries transient
+statuses `429`, `500`, `502`, `503`, and `504`, plus connect and timeout errors.
+It does not retry job or task creation, signed `import/upload` form
+submissions, or `export/url` downloads.
 
-## Socket.io Waits
+## Socket.IO waits
 
 Enable the optional feature when an async application wants lower-latency
 completion than polling and does not expose a public webhook receiver:
 
 ```toml
-cloudconvert-sdk = { version = "0.2", features = ["socket"] }
+cloudconvert-sdk = { version = "0.3", features = ["socket"] }
 ```
 
 ```rust
@@ -439,13 +529,13 @@ async fn run() -> cloudconvert_sdk::Result<()> {
 ```
 
 The managed wait helpers subscribe, check the current resource state to avoid
-missing fast completions, wait for a terminal Socket.io event, and disconnect.
+missing fast completions, wait for a terminal Socket.IO event, and disconnect.
 Use webhooks when CloudConvert can call your service directly.
 
 For streams, use `client.socket(...)` with `SocketChannel`,
 `jobs().task_events_socket(job_id)`, or `users().events_socket()`.
 
-## Runnable Examples
+## Runnable examples
 
 These examples build request payloads and print JSON. They do not call the live
 CloudConvert API, so they are safe to run without credentials:
@@ -458,7 +548,9 @@ cargo run --example advanced_job
 cargo run --example file_extensions
 ```
 
-## Build Tasks
+## Build and test
+
+Run the local validation loop before opening a pull request:
 
 ```sh
 cargo fmt --all -- --check
@@ -467,12 +559,13 @@ cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-targets --locked
 cargo test --workspace --all-targets --all-features --locked
+cargo test --doc --all-features --locked
 ```
 
 CI also generates an `llvm-cov` HTML coverage artifact and enforces the current
-coverage threshold.
+line coverage threshold.
 
-## Live API Tests
+## Live API tests
 
 Live CloudConvert tests are ignored by default so normal CI and `cargo test` do
 not consume API credits.
@@ -480,7 +573,7 @@ not consume API credits.
 Put a real key in `.env` or the process environment:
 
 ```sh
-CLOUDCONVERT_API_KEY=...
+CLOUDCONVERT_API_KEY=<API_KEY>
 ```
 
 Run the live group explicitly:
@@ -489,6 +582,19 @@ Run the live group explicitly:
 cargo test --test live_api -- --ignored
 ```
 
-The live group keeps API usage small. It creates and deletes live tasks/jobs,
-including a watermark job shape, and has one ignored upload/convert/export flow
-with a tiny generated text file. It needs task/job scopes, not `user.read`.
+The live group keeps API usage small. It creates and deletes live tasks and
+jobs, including a watermark job shape, and has one ignored
+upload-convert-export flow with a tiny generated text file. It needs task and
+job scopes, not `user.read`.
+
+## Source map
+
+- Public exports and crate-level examples: [`src/lib.rs`](src/lib.rs)
+- Client configuration and optional retry policy: [`src/config.rs`](src/config.rs)
+- Resource clients, upload helpers, and download helpers: [`src/client.rs`](src/client.rs)
+- Job builders and response models: [`src/jobs.rs`](src/jobs.rs)
+- Task payload builders: [`src/tasks.rs`](src/tasks.rs)
+- Operation metadata validation: [`src/operations.rs`](src/operations.rs)
+- OAuth 2.0 flows: [`src/oauth.rs`](src/oauth.rs)
+- Webhook and signed URL helpers: [`src/webhook.rs`](src/webhook.rs),
+  [`src/signed_url.rs`](src/signed_url.rs)
